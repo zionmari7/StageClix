@@ -5,6 +5,7 @@ find_package(oboe REQUIRED CONFIG)
 
 add_library(stageclix_engine SHARED
     AudioEngine.cpp
+    VoiceCuePlayer.cpp
     JniBridge.cpp
     native-lib.cpp
 )

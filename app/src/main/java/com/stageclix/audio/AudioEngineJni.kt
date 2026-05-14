@@ -35,6 +35,10 @@ class AudioEngineJni {
     fun setSixteenthVolume(volume: Float)             { nativeSetSixteenthVolume(handle, volume) }
     fun setMasterVolume(volume: Float)                { nativeSetMasterVolume(handle, volume) }
     fun getPositionBeats(): Double                    = nativeGetPositionBeats(handle)
+    fun loadVoiceCue(cueId: Int, pcm: FloatArray)    { nativeLoadVoiceCue(handle, cueId, pcm) }
+    fun setCueTimeline(bars: IntArray, cueIds: IntArray) { nativeSetCueTimeline(handle, bars, cueIds) }
+    fun setVoiceCueVolume(volume: Float)              { nativeSetVoiceCueVolume(handle, volume) }
+    fun setVoiceCueMuted(muted: Boolean)              { nativeSetVoiceCueMuted(handle, muted) }
 
     private external fun nativeCreate(): Long
     private external fun nativeDestroy(handle: Long)
@@ -60,4 +64,8 @@ class AudioEngineJni {
     private external fun nativeSetSixteenthVolume(handle: Long, volume: Float)
     private external fun nativeSetMasterVolume(handle: Long, volume: Float)
     private external fun nativeGetPositionBeats(handle: Long): Double
+    private external fun nativeLoadVoiceCue(handle: Long, cueId: Int, pcm: FloatArray)
+    private external fun nativeSetCueTimeline(handle: Long, bars: IntArray, cueIds: IntArray)
+    private external fun nativeSetVoiceCueVolume(handle: Long, volume: Float)
+    private external fun nativeSetVoiceCueMuted(handle: Long, muted: Boolean)
 }

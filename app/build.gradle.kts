@@ -64,6 +64,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.google.oboe:oboe:1.9.3")
+    implementation("androidx.compose.ui:ui-text-google-fonts")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

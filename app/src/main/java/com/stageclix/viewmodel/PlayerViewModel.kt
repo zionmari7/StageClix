@@ -6,9 +6,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stageclix.audio.AudioEngineJni
 import com.stageclix.audio.SampleLoader
+import com.stageclix.audio.UsbAudioDeviceManager
+import com.stageclix.audio.VoiceCueLoader
 import com.stageclix.data.BeatMode
 import com.stageclix.data.ClickType
 import com.stageclix.data.Song
+import com.stageclix.data.VoiceCue
+import com.stageclix.data.VoiceCueEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,7 +25,8 @@ import kotlin.math.roundToInt
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val engine = AudioEngineJni()
+    private val engine     = AudioEngineJni()
+    private val usbManager = UsbAudioDeviceManager(application)
 
     companion object { private const val TAG = "StageClix" }
 
@@ -34,6 +39,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _positionBeats = MutableStateFlow(0.0)
     val positionBeats: StateFlow<Double> = _positionBeats.asStateFlow()
 
+    val connectedUsbDevices: StateFlow<List<UsbAudioDeviceManager.UsbAudioDevice>> =
+        usbManager.connectedDevices
+    val selectedUsb: StateFlow<UsbAudioDeviceManager.UsbAudioDevice?> =
+        usbManager.selectedDevice
+
+    private var currentEngineDeviceId: Int = -1
+
     private val tapTimes = ArrayDeque<Long>()
     private var sampleLoadJob: Job? = null
 
@@ -42,7 +54,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         engine.create()
         val started = engine.start(deviceId = -1)
         Log.d(TAG, "init: engine.start(-1) returned $started")
-        reloadSamples(currentSong.value.clickType, currentSong.value.beatMode)
+        reloadSamples(currentSong.value.clickType)
+        viewModelScope.launch(Dispatchers.IO) {
+            VoiceCueLoader.loadAll(getApplication(), engine)
+        }
+        usbManager.start()
+        viewModelScope.launch {
+            usbManager.selectedDevice.collect { device ->
+                val newId = device?.deviceId ?: -1
+                if (newId != currentEngineDeviceId) {
+                    currentEngineDeviceId = newId
+                    Log.d(TAG, "USB device changed — restarting engine with deviceId=$newId")
+                    engine.stop()
+                    engine.start(deviceId = newId)
+                    reloadSamples(currentSong.value.clickType)
+                }
+            }
+        }
         startPositionPolling()
     }
 
@@ -101,15 +129,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setClickType(type: ClickType) {
-        val song = _currentSong.value.copy(clickType = type)
-        _currentSong.value = song
-        reloadSamples(type, song.beatMode)
-    }
-
-    fun setBeatMode(mode: BeatMode) {
-        val song = _currentSong.value.copy(beatMode = mode)
-        _currentSong.value = song
-        reloadSamples(song.clickType, mode)
+        _currentSong.value = _currentSong.value.copy(clickType = type)
+        reloadSamples(type)
     }
 
     // ── Mixer settings ────────────────────────────────────────────────────────
@@ -186,10 +207,51 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         engine.setSixteenthVolume(vol)
     }
 
+    // ── Voice cues ────────────────────────────────────────────────────────────
+
+    fun addVoiceCueEvent(bar: Int, cue: VoiceCue) {
+        val event = VoiceCueEvent(voiceCue = cue, triggerBar = bar)
+        _currentSong.value = _currentSong.value.copy(
+            voiceCueEvents = _currentSong.value.voiceCueEvents + event
+        )
+        pushCueTimeline()
+    }
+
+    fun removeVoiceCueEvent(id: String) {
+        _currentSong.value = _currentSong.value.copy(
+            voiceCueEvents = _currentSong.value.voiceCueEvents.filter { it.id != id }
+        )
+        pushCueTimeline()
+    }
+
+    fun setVoiceCueVolume(vol: Float) {
+        _currentSong.value = _currentSong.value.copy(voiceCueVolume = vol)
+        engine.setVoiceCueVolume(vol)
+    }
+
+    fun setVoiceCueMuted(muted: Boolean) {
+        _currentSong.value = _currentSong.value.copy(voiceCueMuted = muted)
+        engine.setVoiceCueMuted(muted)
+    }
+
+    private fun pushCueTimeline() {
+        val events = _currentSong.value.voiceCueEvents
+        val bars   = events.map { it.triggerBar }.toIntArray()
+        val cueIds = events.map { VoiceCue.entries.indexOf(it.voiceCue) }.toIntArray()
+        engine.setCueTimeline(bars, cueIds)
+    }
+
+    // ── USB ───────────────────────────────────────────────────────────────────
+
+    fun selectUsbDevice(device: UsbAudioDeviceManager.UsbAudioDevice?) {
+        usbManager.selectDevice(device)
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCleared() {
         super.onCleared()
+        usbManager.stop()
         engine.stop()
         engine.destroy()
     }
@@ -198,13 +260,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     // Cancels any in-flight load so a rapid clickType/beatMode change never
     // applies stale samples over a newer result.
-    private fun reloadSamples(clickType: ClickType, beatMode: BeatMode) {
-        Log.d(TAG, "reloadSamples: clickType=$clickType beatMode=$beatMode")
+    private fun reloadSamples(clickType: ClickType) {
+        Log.d(TAG, "reloadSamples: clickType=$clickType")
         sampleLoadJob?.cancel()
         sampleLoadJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val (beatSamples, accentSamples) =
-                    SampleLoader.loadClickPair(getApplication(), clickType, beatMode)
+                    SampleLoader.loadClickPair(getApplication(), clickType, BeatMode.QUARTER)
                 Log.d(TAG, "Loaded samples: beat=${beatSamples.size} accent=${accentSamples.size}")
                 withContext(Dispatchers.Main) {
                     engine.setClickSample(beatSamples)

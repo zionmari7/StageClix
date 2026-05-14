@@ -3,6 +3,11 @@
 #include <oboe/Oboe.h>
 #include <atomic>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <utility>
+#include <vector>
+#include "VoiceCuePlayer.h"
 
 struct SampleBuffer {
     float* data;
@@ -48,6 +53,11 @@ public:
     void   setBeatEnabled(bool enabled);
     void   setBeatVolume(float volume);
 
+    void   loadVoiceCue(int cueId, const float* pcm, int frameCount);
+    void   setCueTimeline(const int* bars, const int* cueIds, int count);
+    void   setVoiceCueVolume(float volume);
+    void   setVoiceCueMuted(bool muted);
+
     double getPositionBeats();
 
     oboe::DataCallbackResult onAudioReady(
@@ -87,7 +97,17 @@ private:
     SampleBuffer* mAccentBuf{nullptr};
     SampleBuffer* mClickBuf{nullptr};
 
+    std::unique_ptr<VoiceCuePlayer>  mVoiceCuePlayer{new VoiceCuePlayer()};
+    std::vector<std::pair<int,int>>  mCueTimeline;
+    std::mutex                       mTimelineMutex;
+    std::atomic<int>                 mLastFiredBar{-1};
+
+    std::vector<float> mClickMixBuf;
+    std::vector<float> mCueMixBuf;
+    std::vector<float> mVoiceMixBuf;
+
     int32_t              mSampleRate{48000};
+    int32_t              mChannelCount{1};
     int64_t              mCurrentFrame{0};
     int64_t              mLastQuarterNum{-1};
     int64_t              mLastEighthNum{-1};

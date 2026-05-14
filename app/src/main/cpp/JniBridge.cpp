@@ -116,4 +116,29 @@ JFUNC(jdouble, nativeGetPositionBeats)(JNIEnv*, jobject, jlong handle) {
     return static_cast<jdouble>(engine(handle)->getPositionBeats());
 }
 
+JFUNC(void, nativeLoadVoiceCue)(JNIEnv* env, jobject, jlong handle, jint cueId, jfloatArray pcm) {
+    jsize   len  = env->GetArrayLength(pcm);
+    jfloat* data = env->GetFloatArrayElements(pcm, nullptr);
+    engine(handle)->loadVoiceCue(static_cast<int>(cueId), data, static_cast<int>(len));
+    env->ReleaseFloatArrayElements(pcm, data, JNI_ABORT);
+}
+
+JFUNC(void, nativeSetCueTimeline)(JNIEnv* env, jobject, jlong handle,
+    jintArray bars, jintArray cueIds) {
+    jsize count     = env->GetArrayLength(bars);
+    jint* barsData  = env->GetIntArrayElements(bars,   nullptr);
+    jint* cuesData  = env->GetIntArrayElements(cueIds, nullptr);
+    engine(handle)->setCueTimeline(barsData, cuesData, static_cast<int>(count));
+    env->ReleaseIntArrayElements(bars,   barsData, JNI_ABORT);
+    env->ReleaseIntArrayElements(cueIds, cuesData, JNI_ABORT);
+}
+
+JFUNC(void, nativeSetVoiceCueVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setVoiceCueVolume(static_cast<float>(volume));
+}
+
+JFUNC(void, nativeSetVoiceCueMuted)(JNIEnv*, jobject, jlong handle, jboolean muted) {
+    engine(handle)->setVoiceCueMuted(muted == JNI_TRUE);
+}
+
 } // extern "C"
