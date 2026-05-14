@@ -1,9 +1,12 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.stageclix
 
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,9 +22,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -32,13 +36,15 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderColors
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -54,11 +60,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stageclix.data.BeatMode
 import com.stageclix.data.ClickType
@@ -73,9 +84,6 @@ private val BgSurface   = Color(0xFF252525)
 private val BgDark      = Color(0xFF1A1A1A)
 private val BgPlay      = Color(0xFF1A5C1A)
 private val BgTap       = Color(0xFF2A2A3A)
-private val BgChipOff   = Color(0xFF2A2A2A)
-private val BgChipGreen = Color(0xFF1A3A1A)
-private val BgChipBlue  = Color(0xFF1A2A3A)
 private val BdrDark     = Color(0xFF111111)
 private val BdrMid      = Color(0xFF2A2A2A)
 private val BdrLight    = Color(0xFF3A3A3A)
@@ -96,6 +104,19 @@ private val TIME_SIGS = listOf(2 to 4, 3 to 4, 4 to 4, 5 to 4, 6 to 8, 7 to 8)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        val windowInsetsController =
+            WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.isAppearanceLightStatusBars = false
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.setSystemBarsAppearance(
+                0,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+            )
+        }
+
         setContent {
             MetronomeScreen(onBack = { finish() })
         }
@@ -123,60 +144,59 @@ fun MetronomeScreen(
         )
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Bg),
+            .background(Bg)
+            .windowInsetsPadding(WindowInsets.statusBars),
     ) {
-        TransportBar(
-            song          = song,
-            isPlaying     = isPlaying,
-            positionBeats = positionBeats,
-            onBack        = onBack,
-            onPlayPause   = { if (isPlaying) vm.pause() else vm.play() },
-            onStop        = { vm.pause(); vm.rewind() },
-            onTap         = { vm.onTap() },
-            onBpmClick    = { showBpmDialog = true },
-        )
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            ClickToggleRow(
-                enabled  = song.clickEnabled,
-                onToggle = { vm.setClickEnabled(it) },
+        Column(modifier = Modifier.fillMaxSize()) {
+            TransportBar(
+                song          = song,
+                isPlaying     = isPlaying,
+                positionBeats = positionBeats,
+                onBack        = onBack,
+                onPlayPause   = { if (isPlaying) vm.pause() else vm.play() },
+                onStop        = { vm.pause(); vm.rewind() },
+                onTap         = { vm.onTap() },
+                onBpmClick    = { showBpmDialog = true },
             )
 
             Column(
-                modifier = Modifier.alpha(if (song.clickEnabled) 1f else 0.3f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                ClickTypeSection(
-                    selected = song.clickType,
-                    onSelect = { vm.setClickType(it) },
+                ClickToggleRow(
+                    enabled  = song.clickEnabled,
+                    onToggle = { vm.setClickEnabled(it) },
                 )
-                BeatModeSection(
-                    selected = song.beatMode,
-                    onSelect = { vm.setBeatMode(it) },
-                )
-                TimeSigSection(
-                    numerator   = song.timeSigNumerator,
-                    denominator = song.timeSigDenominator,
-                    onSelect    = { n, d -> vm.setTimeSignature(n, d) },
-                )
-                BeatMixerSection(
-                    song           = song,
-                    clickEnabled   = song.clickEnabled,
-                    onAccentToggle = { vm.setAccentEnabled(it) },
-                    onAccentVolume = { vm.setAccentVolume(it) },
-                    onBeatToggle   = { vm.setBeatEnabled(it) },
-                    onBeatVolume   = { vm.setBeatVolume(it) },
-                    onMasterVolume = { vm.setMasterVolume(it) },
-                )
+
+                Column(
+                    modifier = Modifier.alpha(if (song.clickEnabled) 1f else 0.3f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    ControlDropdownRow(
+                        song        = song,
+                        onClickType = { vm.setClickType(it) },
+                        onBeatMode  = { vm.setBeatMode(it) },
+                        onTimeSig   = { n, d -> vm.setTimeSignature(n, d) },
+                    )
+                    BeatMixerSection(
+                        song              = song,
+                        onAccentToggle    = { vm.setAccentEnabled(it) },
+                        onAccentVolume    = { vm.setAccentVolume(it) },
+                        onQuarterToggle   = { vm.setQuarterEnabled(it) },
+                        onQuarterVolume   = { vm.setQuarterVolume(it) },
+                        onEighthToggle    = { vm.setEighthEnabled(it) },
+                        onEighthVolume    = { vm.setEighthVolume(it) },
+                        onSixteenthToggle = { vm.setSixteenthEnabled(it) },
+                        onSixteenthVolume = { vm.setSixteenthVolume(it) },
+                        onMasterVolume    = { vm.setMasterVolume(it) },
+                    )
+                }
             }
         }
     }
@@ -203,7 +223,6 @@ private fun TransportBar(
                 .background(BgSurface),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Back  32 × 48
             TapCell(
                 modifier = Modifier
                     .width(32.dp)
@@ -219,7 +238,6 @@ private fun TransportBar(
                 )
             }
 
-            // Play / Pause  52 × 48
             TapCell(
                 modifier = Modifier
                     .width(52.dp)
@@ -236,7 +254,6 @@ private fun TransportBar(
                 )
             }
 
-            // Stop (rewind)  44 × 48
             TapCell(
                 modifier = Modifier
                     .width(44.dp)
@@ -253,7 +270,6 @@ private fun TransportBar(
                 )
             }
 
-            // TAP  48 × 48
             TapCell(
                 modifier = Modifier
                     .width(48.dp)
@@ -265,7 +281,6 @@ private fun TransportBar(
                 Text("TAP", color = Color(0xFF8888DD), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
 
-            // BPM — tappable, opens dialog
             TapCell(
                 modifier = Modifier
                     .weight(1.2f)
@@ -282,7 +297,6 @@ private fun TransportBar(
                 )
             }
 
-            // Time signature
             Box(
                 modifier = Modifier
                     .weight(0.9f)
@@ -299,7 +313,6 @@ private fun TransportBar(
                 )
             }
 
-            // Position
             Box(
                 modifier = Modifier
                     .weight(1.3f)
@@ -360,97 +373,137 @@ private fun ClickToggleRow(enabled: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
-// ── Click Type ────────────────────────────────────────────────────────────────
+// ── Control Dropdown Row ──────────────────────────────────────────────────────
 
 @Composable
-private fun ClickTypeSection(selected: ClickType, onSelect: (ClickType) -> Unit) {
-    SectionLabel("CLICK TYPE")
-    Spacer(Modifier.height(6.dp))
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(ClickType.entries) { type ->
-            val sel = type == selected
-            Box(
-                modifier = Modifier
-                    .width(80.dp)
-                    .height(34.dp)
-                    .background(if (sel) BgChipGreen else BgChipOff, RoundedCornerShape(4.dp))
-                    .border(1.dp, if (sel) BdrGreen else BdrLight, RoundedCornerShape(4.dp))
-                    .clickable { onSelect(type) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text     = type.displayName,
-                    color    = if (sel) TextGreen else TextMuted,
-                    fontSize = 12.sp,
-                )
-            }
-        }
-    }
-}
-
-// ── Beat Mode ─────────────────────────────────────────────────────────────────
-
-@Composable
-private fun BeatModeSection(selected: BeatMode, onSelect: (BeatMode) -> Unit) {
-    SectionLabel("BEAT MODE")
-    Spacer(Modifier.height(6.dp))
+private fun ControlDropdownRow(
+    song: Song,
+    onClickType: (ClickType) -> Unit,
+    onBeatMode: (BeatMode) -> Unit,
+    onTimeSig: (Int, Int) -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        BeatMode.entries.forEach { mode ->
-            val sel = mode == selected
-            Box(
+        var clickExpanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(
+            expanded          = clickExpanded,
+            onExpandedChange  = { clickExpanded = it },
+            modifier          = Modifier.weight(1f),
+        ) {
+            DropdownAnchor(
+                label    = "CLICK TYPE",
+                value    = song.clickType.displayName,
                 modifier = Modifier
-                    .weight(1f)
-                    .height(34.dp)
-                    .background(if (sel) BgChipBlue else BgChipOff, RoundedCornerShape(4.dp))
-                    .border(1.dp, if (sel) BdrBlue else BdrLight, RoundedCornerShape(4.dp))
-                    .clickable { onSelect(mode) },
-                contentAlignment = Alignment.Center,
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+                    .fillMaxWidth(),
+            )
+            ExposedDropdownMenu(
+                expanded          = clickExpanded,
+                onDismissRequest  = { clickExpanded = false },
+                modifier          = Modifier.background(BgSurface),
             ) {
-                Text(
-                    text     = mode.displayName,
-                    color    = if (sel) TextBlue else TextMuted,
-                    fontSize = 11.sp,
-                )
+                ClickType.entries.forEach { type ->
+                    val isSel = type == song.clickType
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text     = type.displayName,
+                                fontSize = 11.sp,
+                                color    = if (isSel) TextGreen else Color(0xFFCCCCCC),
+                            )
+                        },
+                        onClick  = { onClickType(type); clickExpanded = false },
+                        modifier = Modifier.background(if (isSel) Color(0xFF1A3A1A) else Color.Transparent),
+                    )
+                }
+            }
+        }
+
+        var beatExpanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(
+            expanded         = beatExpanded,
+            onExpandedChange = { beatExpanded = it },
+            modifier         = Modifier.weight(1f),
+        ) {
+            DropdownAnchor(
+                label    = "BEAT MODE",
+                value    = song.beatMode.displayName,
+                modifier = Modifier
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+                    .fillMaxWidth(),
+            )
+            ExposedDropdownMenu(
+                expanded         = beatExpanded,
+                onDismissRequest = { beatExpanded = false },
+                modifier         = Modifier.background(BgSurface),
+            ) {
+                BeatMode.entries.forEach { mode ->
+                    val isSel = mode == song.beatMode
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text     = mode.displayName,
+                                fontSize = 11.sp,
+                                color    = if (isSel) TextGreen else Color(0xFFCCCCCC),
+                            )
+                        },
+                        onClick  = { onBeatMode(mode); beatExpanded = false },
+                        modifier = Modifier.background(if (isSel) Color(0xFF1A3A1A) else Color.Transparent),
+                    )
+                }
+            }
+        }
+
+        var timeSigExpanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(
+            expanded         = timeSigExpanded,
+            onExpandedChange = { timeSigExpanded = it },
+            modifier         = Modifier.weight(1f),
+        ) {
+            DropdownAnchor(
+                label    = "TIME SIG",
+                value    = "${song.timeSigNumerator}/${song.timeSigDenominator}",
+                modifier = Modifier
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+                    .fillMaxWidth(),
+            )
+            ExposedDropdownMenu(
+                expanded         = timeSigExpanded,
+                onDismissRequest = { timeSigExpanded = false },
+                modifier         = Modifier.background(BgSurface),
+            ) {
+                TIME_SIGS.forEach { (n, d) ->
+                    val isSel = n == song.timeSigNumerator && d == song.timeSigDenominator
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text     = "$n/$d",
+                                fontSize = 11.sp,
+                                color    = if (isSel) TextGreen else Color(0xFFCCCCCC),
+                            )
+                        },
+                        onClick  = { onTimeSig(n, d); timeSigExpanded = false },
+                        modifier = Modifier.background(if (isSel) Color(0xFF1A3A1A) else Color.Transparent),
+                    )
+                }
             }
         }
     }
 }
 
-// ── Time Signature ────────────────────────────────────────────────────────────
-
 @Composable
-private fun TimeSigSection(numerator: Int, denominator: Int, onSelect: (Int, Int) -> Unit) {
-    SectionLabel("TIME SIGNATURE")
-    Spacer(Modifier.height(6.dp))
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        TIME_SIGS.chunked(3).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-                row.forEach { (n, d) ->
-                    val sel = n == numerator && d == denominator
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .background(if (sel) BgChipBlue else BgChipOff, RoundedCornerShape(4.dp))
-                            .border(1.dp, if (sel) BdrBlue else BdrLight, RoundedCornerShape(4.dp))
-                            .clickable { onSelect(n, d) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text       = "$n / $d",
-                            color      = if (sel) TextBlue else TextMuted,
-                            fontSize   = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                        )
-                    }
-                }
-            }
+private fun DropdownAnchor(label: String, value: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(BgSurface, RoundedCornerShape(4.dp))
+            .border(1.dp, BdrMid, RoundedCornerShape(4.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Column {
+            Text(text = label, fontSize = 8.sp, color = Color(0xFF555555), letterSpacing = 0.5.sp)
+            Text(text = value, fontSize = 11.sp, color = Color(0xFFCCCCCC))
         }
     }
 }
@@ -460,128 +513,261 @@ private fun TimeSigSection(numerator: Int, denominator: Int, onSelect: (Int, Int
 @Composable
 private fun BeatMixerSection(
     song: Song,
-    clickEnabled: Boolean,
     onAccentToggle: (Boolean) -> Unit,
     onAccentVolume: (Float) -> Unit,
-    onBeatToggle: (Boolean) -> Unit,
-    onBeatVolume: (Float) -> Unit,
+    onQuarterToggle: (Boolean) -> Unit,
+    onQuarterVolume: (Float) -> Unit,
+    onEighthToggle: (Boolean) -> Unit,
+    onEighthVolume: (Float) -> Unit,
+    onSixteenthToggle: (Boolean) -> Unit,
+    onSixteenthVolume: (Float) -> Unit,
     onMasterVolume: (Float) -> Unit,
 ) {
     SectionLabel("BEAT MIXER")
     Spacer(Modifier.height(6.dp))
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors   = CardDefaults.cardColors(containerColor = BgSurface),
-        border   = BorderStroke(1.dp, BdrMid),
-        shape    = RoundedCornerShape(6.dp),
+
+    val beatMode       = song.beatMode
+    val eighthActive   = beatMode == BeatMode.EIGHTH || beatMode == BeatMode.SIXTEENTH
+    val sixteenthActive = beatMode == BeatMode.SIXTEENTH
+
+    Row(
+        modifier              = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            MixerRow(
-                label        = "Accent",
-                labelColor   = TextGreen,
-                toggleState  = song.accentEnabled,
-                onToggle     = onAccentToggle,
-                volume       = song.accentVolume,
-                onVolume     = onAccentVolume,
-                rowEnabled   = clickEnabled,
-            )
+        FaderChannel(
+            label        = "ACC",
+            sublabel     = "Beat 1",
+            enabled      = song.accentEnabled,
+            onToggle     = onAccentToggle,
+            volume       = song.accentVolume,
+            onVolume     = onAccentVolume,
+            channelAlpha = 1f,
+            isInteractive = true,
+            onBg         = Color(0xFF1A5C1A),
+            onBorder     = Color(0xFF2AB02A),
+            onText       = Color(0xFF40E040),
+            sliderColor  = Color(0xFF2AB02A),
+            modifier     = Modifier.weight(1f),
+        )
 
-            HorizontalDivider(thickness = 0.5.dp, color = BdrMid)
+        FaderChannel(
+            label        = "QTR",
+            sublabel     = "2,3,4",
+            enabled      = song.beatMixer.quarterEnabled,
+            onToggle     = onQuarterToggle,
+            volume       = song.beatMixer.quarterVolume,
+            onVolume     = onQuarterVolume,
+            channelAlpha = 1f,
+            isInteractive = true,
+            onBg         = Color(0xFF1A2A4A),
+            onBorder     = Color(0xFF3A7BD5),
+            onText       = Color(0xFF7AB3F5),
+            sliderColor  = Color(0xFF3A7BD5),
+            modifier     = Modifier.weight(1f),
+        )
 
-            MixerRow(
-                label       = "Beat",
-                labelColor  = TextBlue,
-                toggleState = song.beatEnabled,
-                onToggle    = onBeatToggle,
-                volume      = song.beatVolume,
-                onVolume    = onBeatVolume,
-                rowEnabled  = clickEnabled && song.beatMode != BeatMode.ACCENTS,
-                alpha       = if (song.beatMode == BeatMode.ACCENTS) 0.3f else 1f,
-            )
+        FaderChannel(
+            label        = "8TH",
+            sublabel     = "+ands",
+            enabled      = song.beatMixer.eighthEnabled,
+            onToggle     = onEighthToggle,
+            volume       = song.beatMixer.eighthVolume,
+            onVolume     = onEighthVolume,
+            channelAlpha = if (eighthActive) 1f else 0.2f,
+            isInteractive = eighthActive,
+            onBg         = Color(0xFF2A1A3A),
+            onBorder     = Color(0xFF7D3C98),
+            onText       = Color(0xFFC39BD3),
+            sliderColor  = Color(0xFF7D3C98),
+            modifier     = Modifier.weight(1f),
+        )
 
-            HorizontalDivider(thickness = 0.5.dp, color = BdrMid)
+        FaderChannel(
+            label        = "16TH",
+            sublabel     = "e+a",
+            enabled      = song.beatMixer.sixteenthEnabled,
+            onToggle     = onSixteenthToggle,
+            volume       = song.beatMixer.sixteenthVolume,
+            onVolume     = onSixteenthVolume,
+            channelAlpha = if (sixteenthActive) 1f else 0.2f,
+            isInteractive = sixteenthActive,
+            onBg         = Color(0xFF3A1A00),
+            onBorder     = Color(0xFFC06020),
+            onText       = Color(0xFFF0A070),
+            sliderColor  = Color(0xFFC06020),
+            modifier     = Modifier.weight(1f),
+        )
 
-            MixerRow(
-                label       = "Master",
-                labelColor  = TextMuted,
-                toggleState = null,
-                onToggle    = null,
-                volume      = song.masterVolume,
-                onVolume    = onMasterVolume,
-                rowEnabled  = clickEnabled,
-                valueColor  = Color.White,
-            )
-        }
+        MasterFaderChannel(
+            volume   = song.masterVolume,
+            onVolume = onMasterVolume,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
 @Composable
-private fun MixerRow(
+private fun FaderChannel(
     label: String,
-    labelColor: Color,
-    toggleState: Boolean?,
-    onToggle: ((Boolean) -> Unit)?,
+    sublabel: String,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
     volume: Float,
     onVolume: (Float) -> Unit,
-    rowEnabled: Boolean,
-    alpha: Float = 1f,
-    valueColor: Color = labelColor,
+    channelAlpha: Float,
+    isInteractive: Boolean,
+    onBg: Color,
+    onBorder: Color,
+    onText: Color,
+    sliderColor: Color,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .alpha(alpha),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text     = label,
-            color    = labelColor,
-            fontSize = 12.sp,
-            modifier = Modifier.width(48.dp),
-        )
+    val offBg     = Color(0xFF1A1A1A)
+    val offBorder = BdrMid
+    val offText   = Color(0xFF333333)
 
-        if (toggleState != null && onToggle != null) {
-            Switch(
-                checked         = toggleState,
-                onCheckedChange = onToggle,
-                enabled         = rowEnabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor   = labelColor,
-                    checkedTrackColor   = labelColor.copy(alpha = 0.25f),
-                    uncheckedThumbColor = TextMuted,
-                    uncheckedTrackColor = BdrLight,
+    Column(
+        modifier = modifier
+            .alpha(channelAlpha)
+            .padding(horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(26.dp)
+                .background(if (enabled) onBg else offBg, RoundedCornerShape(4.dp))
+                .border(1.dp, if (enabled) onBorder else offBorder, RoundedCornerShape(4.dp))
+                .then(
+                    if (isInteractive) Modifier.clickable { onToggle(!enabled) }
+                    else Modifier
                 ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text       = label,
+                fontSize   = 9.sp,
+                color      = if (enabled) onText else offText,
+                fontFamily = FontFamily.Monospace,
             )
-        } else {
-            // Spacer keeps the slider start-edge aligned with the toggled rows
-            Spacer(Modifier.width(52.dp))
         }
 
-        Slider(
+        Text(
+            text      = sublabel,
+            fontSize  = 8.sp,
+            color     = Color(0xFF555555),
+            textAlign = TextAlign.Center,
+        )
+
+        VerticalSlider(
             value         = volume,
             onValueChange = onVolume,
-            enabled       = rowEnabled && (toggleState != false),
-            modifier      = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp),
+            height        = 100.dp,
+            enabled       = isInteractive && enabled,
             colors = SliderDefaults.colors(
-                thumbColor       = labelColor,
-                activeTrackColor = labelColor,
+                thumbColor          = sliderColor,
+                activeTrackColor    = sliderColor,
+                inactiveTrackColor  = sliderColor.copy(alpha = 0.25f),
             ),
         )
 
         Text(
             text       = "${(volume * 100).roundToInt()}%",
-            color      = valueColor,
-            fontSize   = 11.sp,
+            fontSize   = 9.sp,
+            color      = TextMuted,
             fontFamily = FontFamily.Monospace,
-            textAlign  = TextAlign.End,
-            modifier   = Modifier.width(36.dp),
+            textAlign  = TextAlign.Center,
         )
     }
+}
+
+@Composable
+private fun MasterFaderChannel(
+    volume: Float,
+    onVolume: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier         = Modifier.fillMaxWidth().height(26.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text       = "MST",
+                fontSize   = 9.sp,
+                color      = TextMuted,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+
+        Text(
+            text     = "Out",
+            fontSize = 8.sp,
+            color    = Color(0xFF555555),
+        )
+
+        VerticalSlider(
+            value         = volume,
+            onValueChange = onVolume,
+            height        = 100.dp,
+            colors = SliderDefaults.colors(
+                thumbColor         = TextMuted,
+                activeTrackColor   = TextMuted,
+                inactiveTrackColor = Color(0xFF444444),
+            ),
+        )
+
+        Text(
+            text       = "${(volume * 100).roundToInt()}%",
+            fontSize   = 9.sp,
+            color      = TextMuted,
+            fontFamily = FontFamily.Monospace,
+            textAlign  = TextAlign.Center,
+        )
+    }
+}
+
+// Rotates a horizontal Slider 270° and swaps layout constraints so the result
+// occupies (fader-width × height) space with correct touch targets.
+@Composable
+private fun VerticalSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    height: Dp,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    colors: SliderColors = SliderDefaults.colors(),
+) {
+    Slider(
+        value         = value,
+        onValueChange = onValueChange,
+        enabled       = enabled,
+        colors        = colors,
+        modifier      = modifier
+            .graphicsLayer { rotationZ = 270f }
+            .layout { measurable, constraints ->
+                val heightPx  = height.roundToPx()
+                val placeable = measurable.measure(
+                    Constraints(
+                        minWidth  = constraints.minHeight,
+                        maxWidth  = heightPx,
+                        minHeight = constraints.minWidth,
+                        maxHeight = constraints.maxWidth,
+                    )
+                )
+                layout(placeable.height, placeable.width) {
+                    placeable.place(
+                        x = -(placeable.width - placeable.height) / 2,
+                        y = -(placeable.height - placeable.width) / 2,
+                    )
+                }
+            },
+    )
 }
 
 // ── BPM dialog ────────────────────────────────────────────────────────────────

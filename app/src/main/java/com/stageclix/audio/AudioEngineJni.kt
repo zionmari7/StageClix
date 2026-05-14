@@ -27,6 +27,12 @@ class AudioEngineJni {
     fun setAccentVolume(volume: Float)                { nativeSetAccentVolume(handle, volume) }
     fun setBeatEnabled(enabled: Boolean)              { nativeSetBeatEnabled(handle, enabled) }
     fun setBeatVolume(volume: Float)                  { nativeSetBeatVolume(handle, volume) }
+    fun setQuarterEnabled(enabled: Boolean)           { nativeSetQuarterEnabled(handle, enabled) }
+    fun setQuarterVolume(volume: Float)               { nativeSetQuarterVolume(handle, volume) }
+    fun setEighthEnabled(enabled: Boolean)            { nativeSetEighthEnabled(handle, enabled) }
+    fun setEighthVolume(volume: Float)                { nativeSetEighthVolume(handle, volume) }
+    fun setSixteenthEnabled(enabled: Boolean)         { nativeSetSixteenthEnabled(handle, enabled) }
+    fun setSixteenthVolume(volume: Float)             { nativeSetSixteenthVolume(handle, volume) }
     fun setMasterVolume(volume: Float)                { nativeSetMasterVolume(handle, volume) }
     fun getPositionBeats(): Double                    = nativeGetPositionBeats(handle)
 
@@ -46,6 +52,12 @@ class AudioEngineJni {
     private external fun nativeSetAccentVolume(handle: Long, volume: Float)
     private external fun nativeSetBeatEnabled(handle: Long, enabled: Boolean)
     private external fun nativeSetBeatVolume(handle: Long, volume: Float)
+    private external fun nativeSetQuarterEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeSetQuarterVolume(handle: Long, volume: Float)
+    private external fun nativeSetEighthEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeSetEighthVolume(handle: Long, volume: Float)
+    private external fun nativeSetSixteenthEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeSetSixteenthVolume(handle: Long, volume: Float)
     private external fun nativeSetMasterVolume(handle: Long, volume: Float)
     private external fun nativeGetPositionBeats(handle: Long): Double
 }

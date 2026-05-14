@@ -84,6 +84,30 @@ JFUNC(void, nativeSetBeatVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) 
     engine(handle)->setBeatVolume(static_cast<float>(volume));
 }
 
+JFUNC(void, nativeSetQuarterEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setQuarterEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetQuarterVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setQuarterVolume(static_cast<float>(volume));
+}
+
+JFUNC(void, nativeSetEighthEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setEighthEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetEighthVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setEighthVolume(static_cast<float>(volume));
+}
+
+JFUNC(void, nativeSetSixteenthEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setSixteenthEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetSixteenthVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setSixteenthVolume(static_cast<float>(volume));
+}
+
 JFUNC(void, nativeSetMasterVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
     engine(handle)->setMasterVolume(static_cast<float>(volume));
 }

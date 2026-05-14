@@ -34,9 +34,19 @@ public:
     void   setAccentSample(const float* pcm, int length);
     void   setAccentEnabled(bool enabled);
     void   setAccentVolume(float volume);
+
+    void   setQuarterEnabled(bool enabled);
+    void   setQuarterVolume(float volume);
+    void   setEighthEnabled(bool enabled);
+    void   setEighthVolume(float volume);
+    void   setSixteenthEnabled(bool enabled);
+    void   setSixteenthVolume(float volume);
+
+    void   setMasterVolume(float volume);
+
+    // Legacy: forward to quarter tier so existing callers keep working.
     void   setBeatEnabled(bool enabled);
     void   setBeatVolume(float volume);
-    void   setMasterVolume(float volume);
 
     double getPositionBeats();
 
@@ -61,9 +71,15 @@ private:
     std::atomic<bool>  mClickEnabled{true};
     std::atomic<bool>  mAccentEnabled{true};
     std::atomic<float> mAccentVolume{1.0f};
-    std::atomic<bool>  mBeatEnabled{true};
-    std::atomic<float> mBeatVolume{0.85f};
-    std::atomic<float> mMasterVolume{1.0f};
+
+    std::atomic<bool>  mQuarterEnabled{true};
+    std::atomic<float> mQuarterVolume{0.85f};
+    std::atomic<bool>  mEighthEnabled{true};
+    std::atomic<float> mEighthVolume{0.55f};
+    std::atomic<bool>  mSixteenthEnabled{true};
+    std::atomic<float> mSixteenthVolume{0.35f};
+
+    std::atomic<float> mMasterVolume{0.8f};
 
     // Double-buffer swap: main thread writes mPending*; audio thread owns mActive*.
     std::atomic<SampleBuffer*> mPendingAccentBuf{nullptr};
@@ -73,7 +89,9 @@ private:
 
     int32_t              mSampleRate{48000};
     int64_t              mCurrentFrame{0};
-    int64_t              mLastBeatNum{-1};
+    int64_t              mLastQuarterNum{-1};
+    int64_t              mLastEighthNum{-1};
+    int64_t              mLastSixteenthNum{-1};
     std::atomic<int64_t> mAtomicFramePos{0};
 
     struct PlayHead {
@@ -81,6 +99,7 @@ private:
         int                 pos    = 0;
         float               volume = 1.0f;
         bool                active = false;
+        int                 tier   = 0; // 0=accent 1=quarter 2=eighth 3=sixteenth
     };
     PlayHead mAccentHead;
     PlayHead mClickHead;

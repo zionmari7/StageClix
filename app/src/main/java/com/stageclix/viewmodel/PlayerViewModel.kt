@@ -144,6 +144,48 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         engine.setMasterVolume(vol)
     }
 
+    fun setQuarterEnabled(enabled: Boolean) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(quarterEnabled = enabled)
+        )
+        engine.setQuarterEnabled(enabled)
+    }
+
+    fun setQuarterVolume(vol: Float) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(quarterVolume = vol)
+        )
+        engine.setQuarterVolume(vol)
+    }
+
+    fun setEighthEnabled(enabled: Boolean) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(eighthEnabled = enabled)
+        )
+        engine.setEighthEnabled(enabled)
+    }
+
+    fun setEighthVolume(vol: Float) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(eighthVolume = vol)
+        )
+        engine.setEighthVolume(vol)
+    }
+
+    fun setSixteenthEnabled(enabled: Boolean) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(sixteenthEnabled = enabled)
+        )
+        engine.setSixteenthEnabled(enabled)
+    }
+
+    fun setSixteenthVolume(vol: Float) {
+        _currentSong.value = _currentSong.value.copy(
+            beatMixer = _currentSong.value.beatMixer.copy(sixteenthVolume = vol)
+        )
+        engine.setSixteenthVolume(vol)
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCleared() {
