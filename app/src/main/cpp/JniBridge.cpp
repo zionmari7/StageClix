@@ -1,46 +1,95 @@
 #include <jni.h>
 #include "AudioEngine.h"
 
-static AudioEngine *engine(jlong handle) {
-    return reinterpret_cast<AudioEngine *>(handle);
+// JFUNC(return_type, method_name) expands to the full JNI signature for
+// com.stageclix.audio.AudioEngineJni so the class path is only written once.
+#define JFUNC(ret, name) \
+    JNIEXPORT ret JNICALL Java_com_stageclix_audio_AudioEngineJni_##name
+
+static AudioEngine* engine(jlong handle) {
+    return reinterpret_cast<AudioEngine*>(handle);
 }
 
 extern "C" {
 
-JNIEXPORT jlong JNICALL
-Java_com_clickcue_audio_AudioEngineJni_create(JNIEnv *, jobject) {
+JFUNC(jlong, nativeCreate)(JNIEnv*, jobject) {
     return reinterpret_cast<jlong>(new AudioEngine());
 }
 
-JNIEXPORT void JNICALL
-Java_com_clickcue_audio_AudioEngineJni_destroy(JNIEnv *, jobject, jlong handle) {
+JFUNC(void, nativeDestroy)(JNIEnv*, jobject, jlong handle) {
     delete engine(handle);
 }
 
-// Returns the oboe::Result int; OK == 0.
-JNIEXPORT jint JNICALL
-Java_com_clickcue_audio_AudioEngineJni_start(JNIEnv *, jobject, jlong handle) {
-    return static_cast<jint>(engine(handle)->start());
+JFUNC(jboolean, nativeStart)(JNIEnv*, jobject, jlong handle, jint deviceId) {
+    return engine(handle)->start(static_cast<int>(deviceId)) ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jint JNICALL
-Java_com_clickcue_audio_AudioEngineJni_stop(JNIEnv *, jobject, jlong handle) {
-    return static_cast<jint>(engine(handle)->stop());
+JFUNC(void, nativeStop)(JNIEnv*, jobject, jlong handle) {
+    engine(handle)->stop();
 }
 
-JNIEXPORT void JNICALL
-Java_com_clickcue_audio_AudioEngineJni_play(JNIEnv *, jobject, jlong handle) {
+JFUNC(void, nativePlay)(JNIEnv*, jobject, jlong handle) {
     engine(handle)->play();
 }
 
-JNIEXPORT void JNICALL
-Java_com_clickcue_audio_AudioEngineJni_pause(JNIEnv *, jobject, jlong handle) {
+JFUNC(void, nativePause)(JNIEnv*, jobject, jlong handle) {
     engine(handle)->pause();
 }
 
-JNIEXPORT void JNICALL
-Java_com_clickcue_audio_AudioEngineJni_setBpm(JNIEnv *, jobject, jlong handle, jdouble bpm) {
+JFUNC(void, nativeRewind)(JNIEnv*, jobject, jlong handle) {
+    engine(handle)->rewind();
+}
+
+JFUNC(void, nativeSetBpm)(JNIEnv*, jobject, jlong handle, jdouble bpm) {
     engine(handle)->setBpm(static_cast<double>(bpm));
+}
+
+JFUNC(void, nativeSetTimeSignature)(JNIEnv*, jobject, jlong handle,
+    jint numerator, jint denominator) {
+    engine(handle)->setTimeSignature(
+        static_cast<int>(numerator), static_cast<int>(denominator));
+}
+
+JFUNC(void, nativeSetClickEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setClickEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetClickSample)(JNIEnv* env, jobject, jlong handle, jfloatArray pcm) {
+    jsize   len  = env->GetArrayLength(pcm);
+    jfloat* data = env->GetFloatArrayElements(pcm, nullptr);
+    engine(handle)->setClickSample(data, static_cast<int>(len));
+    env->ReleaseFloatArrayElements(pcm, data, JNI_ABORT);
+}
+
+JFUNC(void, nativeSetAccentSample)(JNIEnv* env, jobject, jlong handle, jfloatArray pcm) {
+    jsize   len  = env->GetArrayLength(pcm);
+    jfloat* data = env->GetFloatArrayElements(pcm, nullptr);
+    engine(handle)->setAccentSample(data, static_cast<int>(len));
+    env->ReleaseFloatArrayElements(pcm, data, JNI_ABORT);
+}
+
+JFUNC(void, nativeSetAccentEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setAccentEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetAccentVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setAccentVolume(static_cast<float>(volume));
+}
+
+JFUNC(void, nativeSetBeatEnabled)(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    engine(handle)->setBeatEnabled(enabled == JNI_TRUE);
+}
+
+JFUNC(void, nativeSetBeatVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setBeatVolume(static_cast<float>(volume));
+}
+
+JFUNC(void, nativeSetMasterVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
+    engine(handle)->setMasterVolume(static_cast<float>(volume));
+}
+
+JFUNC(jdouble, nativeGetPositionBeats)(JNIEnv*, jobject, jlong handle) {
+    return static_cast<jdouble>(engine(handle)->getPositionBeats());
 }
 
 } // extern "C"

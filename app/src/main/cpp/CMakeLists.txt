@@ -3,12 +3,13 @@ project(StageClix)
 
 find_package(oboe REQUIRED CONFIG)
 
-add_library(clickcue_engine SHARED
+add_library(stageclix_engine SHARED
     AudioEngine.cpp
     JniBridge.cpp
+    native-lib.cpp
 )
 
-target_link_libraries(clickcue_engine
+target_link_libraries(stageclix_engine
     android
     log
     oboe::oboe
@@ -18,8 +19,8 @@ target_link_libraries(clickcue_engine
 # into the CMake output dir so it lands in the APK's lib/<abi>/ folder.
 get_target_property(OBOE_LIB_PATH oboe::oboe IMPORTED_LOCATION)
 add_custom_command(
-    TARGET clickcue_engine POST_BUILD
+    TARGET stageclix_engine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${OBOE_LIB_PATH}"
-        "$<TARGET_FILE_DIR:clickcue_engine>/liboboe.so"
+        "$<TARGET_FILE_DIR:stageclix_engine>/liboboe.so"
 )
