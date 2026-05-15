@@ -100,6 +100,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     // ── Transport ───────────────────────────────────────
 
     fun play() {
+        pushClickClipRanges()
         engine.play()
         _isPlaying.value = true
     }
@@ -229,6 +230,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         applyBeatPatternToEngine(clip.pattern)
         loadClickSamples(clip.pattern.clickType)
+        pushClickClipRanges()
     }
 
     fun loadClickSamples(clickType: ClickType) {
@@ -253,6 +255,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             })
         }
         applyBeatPatternToEngine(clip.pattern)
+        pushClickClipRanges()
     }
 
     fun removeClickClip(clipId: String) {
@@ -346,19 +349,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 applyBeatPatternToEngine(clip.pattern)
                 loadClickSamples(clip.pattern.clickType)
             }
+        pushClickClipRanges()
+    }
+
+    private fun pushClickClipRanges() {
+        val clips = activeSong.value?.tracks
+            ?.find { it.kind == TrackKind.CLICK }
+            ?.clickClips ?: emptyList()
+        val starts    = clips.map { it.startBar }.toIntArray()
+        val durations = clips.map { it.durationBars }.toIntArray()
+        engine.setClickClipRanges(starts, durations)
+        Log.d("StageClix", "Pushed ${clips.size} clip ranges to engine")
     }
 
     fun applyBeatPatternToEngine(pattern: BeatPattern) {
         val beats = pattern.cells.map { it.beatIndex }.toIntArray()
-        val rows = pattern.cells.map { it.row.ordinal }.toIntArray()
-        val subs = pattern.cells.map { it.subIndex }.toIntArray()
-        engine.setBeatPattern(
-            beats,
-            rows,
-            subs,
-            pattern.timeSigNumerator,
-            pattern.bpm
-        )
+        val rows  = pattern.cells.map { it.row.ordinal }.toIntArray()
+        val subs  = pattern.cells.map { it.subIndex }.toIntArray()
+        Log.d("StageClix", "Applied beat pattern: ${pattern.cells.size} cells, bpm=${pattern.bpm}, timeSig=${pattern.timeSigNumerator}/4")
+        engine.setBeatPattern(beats, rows, subs, pattern.timeSigNumerator, pattern.bpm)
     }
 
     // ── Helpers ─────────────────────────────────────────

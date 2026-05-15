@@ -258,6 +258,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         mSectionsDirty.store(false, std::memory_order_relaxed);
     }
 
+    if (mClipRangesDirty.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(mClipRangesMutex);
+        mClickClipRangesActive = mClickClipRanges;
+        mClipRangesDirty.store(false, std::memory_order_relaxed);
+    }
+
     if (mRewindRequested.exchange(false, std::memory_order_acq_rel)) {
         mCurrentFrame     = 0;
         mLastQuarterNum   = -1;
@@ -323,11 +329,25 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     // ── Channel 0: click track (accent + beat ticks) ──────────────────────────
     if (playing && clickEnabled && !beatPattern.empty()) {
-        const int timeSigNum   = std::max(numerator, 1);
+        const int timeSigNum       = std::max(numerator, 1);
         const int64_t framesPerBar = static_cast<int64_t>(framesPerBeat * timeSigNum);
-        const int64_t posInBar = (framesPerBar > 0) ? mCurrentFrame % framesPerBar : 0;
+        const int64_t posInBar     = (framesPerBar > 0) ? mCurrentFrame % framesPerBar : 0;
 
-        for (auto& event : beatPattern) {
+        // Gate: only fire when inside a clip range. If no ranges are defined yet,
+        // play freely (preserves pre-clip behaviour during audition).
+        bool inClipRange = mClickClipRangesActive.empty();
+        if (!inClipRange && framesPerBar > 0) {
+            const int currentBar = static_cast<int>(mCurrentFrame / framesPerBar);
+            for (auto& range : mClickClipRangesActive) {
+                if (currentBar >= range.startBar &&
+                    currentBar <  range.startBar + range.durationBars) {
+                    inClipRange = true;
+                    break;
+                }
+            }
+        }
+
+        if (inClipRange) for (auto& event : beatPattern) {
             double eventBeatPos = static_cast<double>(event.beatIndex);
             if (event.row == 2)      // 8TH
                 eventBeatPos += event.subIndex * 0.5;
@@ -496,6 +516,19 @@ void AudioEngine::setSections(const int* sectionBars, const int* voiceCueIds, in
     std::lock_guard<std::mutex> lock(mSectionsMutex);
     mSectionsPending = std::move(sections);
     mSectionsDirty.store(true, std::memory_order_relaxed);
+}
+
+void AudioEngine::setClickClipRanges(const int* startBars, const int* durations, int count) {
+    std::vector<ClipRange> ranges;
+    ranges.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+        ranges.push_back({startBars[i], durations[i]});
+    {
+        std::lock_guard<std::mutex> lock(mClipRangesMutex);
+        mClickClipRanges = std::move(ranges);
+    }
+    mClipRangesDirty.store(true, std::memory_order_release);
+    LOGI("setClickClipRanges: %d ranges", count);
 }
 
 void AudioEngine::auditNote(int row) {

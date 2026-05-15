@@ -21,6 +21,11 @@ struct BeatEvent {
     int subIndex;    // subdivision within beat
 };
 
+struct ClipRange {
+    int startBar;
+    int durationBars;
+};
+
 struct SampleBuffer {
     float* data;
     int    length;
@@ -51,6 +56,7 @@ public:
         int timeSigNumerator,
         double bpm
     );
+    void   setClickClipRanges(const int* startBars, const int* durations, int count);
 
     void   setClickEnabled(bool enabled);
     void   setClickSample(const float* pcm, int length);
@@ -140,6 +146,11 @@ private:
     std::mutex                       mSectionsMutex;
     std::vector<BeatEvent>           mBeatPattern;
     std::mutex                       mBeatPatternMutex;
+
+    std::vector<ClipRange>           mClickClipRanges;
+    std::atomic<bool>                mClipRangesDirty{false};
+    std::mutex                       mClipRangesMutex;
+    std::vector<ClipRange>           mClickClipRangesActive;
 
     std::atomic<int>  mCurrentBar{-1};
     std::atomic<int>  mCurrentBeat{-1};

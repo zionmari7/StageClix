@@ -65,6 +65,9 @@ class AudioEngineJni {
 
     fun loadVoiceCue(cueId: Int, pcm: FloatArray)    { nativeLoadVoiceCue(handle, cueId, pcm) }
     fun setSections(sectionBars: IntArray, voiceCueIds: IntArray) { nativeSetSections(handle, sectionBars, voiceCueIds) }
+    fun setClickClipRanges(startBars: IntArray, durations: IntArray) {
+        nativeSetClickClipRanges(handle, startBars, durations, startBars.size)
+    }
     fun setVoiceCueVolume(volume: Float)              { nativeSetVoiceCueVolume(handle, volume) }
     fun setVoiceCueMuted(muted: Boolean)              { nativeSetVoiceCueMuted(handle, muted) }
 
@@ -114,6 +117,7 @@ class AudioEngineJni {
     private external fun nativeAuditNote(handle: Long, row: Int, clickTypeIndex: Int)
     private external fun nativeLoadVoiceCue(handle: Long, cueId: Int, pcm: FloatArray)
     private external fun nativeSetSections(handle: Long, sectionBars: IntArray, voiceCueIds: IntArray)
+    private external fun nativeSetClickClipRanges(handle: Long, startBars: IntArray, durations: IntArray, count: Int)
     private external fun nativeSetVoiceCueVolume(handle: Long, volume: Float)
     private external fun nativeSetVoiceCueMuted(handle: Long, muted: Boolean)
 }

@@ -52,12 +52,17 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -92,7 +97,7 @@ import com.stageclix.viewmodel.PlayerViewModel
 
 // ── Constants ─────────────────────────────────────────
 private const val TRACK_HEADER_WIDTH_DP = 72
-private const val RULER_HEIGHT_DP       = 40
+private const val RULER_HEIGHT_DP       = 24
 private const val TRACK_HEIGHT_DP       = 56
 private const val PX_PER_BAR            = 80f
 
@@ -110,8 +115,20 @@ fun TimelineScreen(
 
     val currentSong = song ?: return
 
-    val scrollState = rememberScrollState()
+    val scrollState   = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
+    var laneWidthPx   by remember { mutableStateOf(0) }
     var showBeatBuilder by remember { mutableStateOf(false) }
+
+    LaunchedEffect(positionBeats, isPlaying) {
+        if (!isPlaying) return@LaunchedEffect
+        val beatsPerBar = currentSong.timeSigNumerator.coerceAtLeast(1)
+        val playheadPx  = (positionBeats / beatsPerBar) * PX_PER_BAR
+        val target      = (playheadPx - laneWidthPx / 2f).toInt().coerceAtLeast(0)
+        coroutineScope.launch {
+            scrollState.animateScrollTo(target, animationSpec = tween(durationMillis = 100))
+        }
+    }
 
     Column(
         modifier = modifier
@@ -145,15 +162,7 @@ fun TimelineScreen(
                         .fillMaxWidth()
                         .background(Color(0xFF181818))
                         .border(BorderStroke(0.5.dp, Color(0xFF111111))),
-                ) {
-                    Text(
-                        "BARS",
-                        fontSize = 8.sp,
-                        color = Color(0xFF444444),
-                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 6.dp),
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
+                )
                 currentSong.tracks.forEach { track ->
                     TrackHeader(
                         track = track,
@@ -169,6 +178,7 @@ fun TimelineScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .onSizeChanged { laneWidthPx = it.width }
                     .clipToBounds(),
             ) {
                 Column(
@@ -466,44 +476,39 @@ fun TimelineRuler(
     val safeBars = beatsPerBar.coerceAtLeast(1)
 
     Canvas(modifier = modifier.background(Color(0xFF181818))) {
-        val barW = size.width / totalBars.coerceAtLeast(1)
-
-        for (bar in 0 until totalBars) {
-            val x = bar * barW
-
-            // Major bar line
-            drawLine(Color(0xFF2A2A2A), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-
-            // Bar number — always try, skip if too tight
-            val label = "${bar + 1}"
-            val measured = textMeasurer.measure(
-                label,
-                TextStyle(fontSize = 9.sp, color = Color(0xFF777777), fontFamily = FontFamily.Monospace),
-            )
-            if (barW > measured.size.width + 6f || bar % 4 == 0) {
-                drawText(measured, topLeft = Offset(x + 3f, size.height / 2f - measured.size.height / 2f))
+        for (bar in 0..totalBars) {
+            val x = bar * PX_PER_BAR
+            if (bar < totalBars) {
+                drawRect(
+                    color = if (bar % 2 == 0) Color(0xFF1C1C1C) else Color(0xFF181818),
+                    topLeft = Offset(x, 0f),
+                    size = Size(PX_PER_BAR, size.height),
+                )
             }
-
-            // Beat sub-lines
+            if (bar > 0) {
+                drawText(
+                    textMeasurer = textMeasurer,
+                    text = bar.toString(),
+                    style = TextStyle(fontSize = 8.sp, color = Color(0xFF555555), fontFamily = FontFamily.Monospace),
+                    topLeft = Offset(x + 2f, 2f),
+                )
+            }
+            drawLine(color = Color(0xFF333333), start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.5f)
+            val pxPerBeat = PX_PER_BAR / safeBars
             for (beat in 1 until safeBars) {
-                val beatX = x + beat * (barW / safeBars)
-                drawLine(
-                    Color(0xFF222222),
-                    Offset(beatX, size.height * 0.55f),
-                    Offset(beatX, size.height),
-                    strokeWidth = 0.5f,
+                val bx = x + beat * pxPerBeat
+                drawLine(color = Color(0xFF2A2A2A), start = Offset(bx, size.height * 0.5f), end = Offset(bx, size.height), strokeWidth = 0.5f)
+                drawText(
+                    textMeasurer = textMeasurer,
+                    text = (beat + 1).toString(),
+                    style = TextStyle(fontSize = 7.sp, color = Color(0xFF333333), fontFamily = FontFamily.Monospace),
+                    topLeft = Offset(bx + 2f, size.height * 0.5f),
                 )
             }
         }
-
-        // Playhead
-        val phX = (positionBeats / safeBars * barW).toFloat()
-        drawLine(Color(0xFFE8A020), Offset(phX, 0f), Offset(phX, size.height), strokeWidth = 1.5f)
-        drawRect(
-            color = Color(0xFFE8A020),
-            topLeft = Offset(phX - 5f, 0f),
-            size = Size(10f, 8f),
-        )
+        val px = (positionBeats / safeBars) * PX_PER_BAR
+        drawLine(color = Color(0xFFE8A020), start = Offset(px.toFloat(), 0f), end = Offset(px.toFloat(), size.height), strokeWidth = 1.5f)
+        drawRect(color = Color(0xFFE8A020), topLeft = Offset(px.toFloat() - 4f, 0f), size = Size(8f, 6f))
     }
 }
 
@@ -526,35 +531,49 @@ fun TrackLane(
 
     Box(modifier = modifier.background(bgColor)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val pxPerBar  = PX_PER_BAR
-            val pxPerBeat = pxPerBar / beatsPerBar
+            val pxPerBeat  = PX_PER_BAR / beatsPerBar
+            val pxPer16th  = PX_PER_BAR / (beatsPerBar * 4)
 
             for (bar in 0..totalBars) {
-                val x = bar * pxPerBar
-                drawLine(
-                    color = Color(0xFF1E1E1E),
-                    start = Offset(x, 0f),
-                    end   = Offset(x, size.height),
-                    strokeWidth = 1f,
-                )
+                val x = bar * PX_PER_BAR
+                val barBg = if (bar % 2 == 0) Color(0xFF141414) else Color(0xFF101010)
+                drawRect(color = barBg, topLeft = Offset(x, 0f), size = Size(PX_PER_BAR, size.height))
+                drawLine(color = Color(0xFF2A2A2A), start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.5f)
                 for (beat in 1 until beatsPerBar) {
-                    val bx = bar * pxPerBar + beat * pxPerBeat
-                    drawLine(
-                        color = Color(0xFF181818),
-                        start = Offset(bx, 0f),
-                        end   = Offset(bx, size.height),
-                        strokeWidth = 0.5f,
-                    )
+                    val bx = x + beat * pxPerBeat
+                    drawLine(color = Color(0xFF222222), start = Offset(bx, 0f), end = Offset(bx, size.height), strokeWidth = 1f)
+                }
+                for (sixteenth in 1 until beatsPerBar * 4) {
+                    if (sixteenth % 4 == 0) continue
+                    val sx = x + sixteenth * pxPer16th
+                    drawLine(color = Color(0xFF1A1A1A), start = Offset(sx, 0f), end = Offset(sx, size.height), strokeWidth = 0.5f)
                 }
             }
 
-            val px = (positionBeats / beatsPerBar) * pxPerBar
-            drawLine(
-                color       = Color(0xFFE8A020),
-                start       = Offset(px.toFloat(), 0f),
-                end         = Offset(px.toFloat(), size.height),
-                strokeWidth = 1.5f,
-            )
+            val px = (positionBeats / beatsPerBar) * PX_PER_BAR
+            drawLine(color = Color(0xFFE8A020), start = Offset(px.toFloat(), 0f), end = Offset(px.toFloat(), size.height), strokeWidth = 1.5f)
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(14.dp)
+                .background(Color(0xFF161616))
+                .align(Alignment.TopStart),
+        ) {
+            val pxPerBeat = PX_PER_BAR / beatsPerBar
+            for (bar in 0..totalBars) {
+                for (beat in 0 until beatsPerBar) {
+                    val bx = bar * PX_PER_BAR + beat * pxPerBeat
+                    val tickH = if (beat == 0) size.height else size.height * 0.5f
+                    drawLine(
+                        color = if (beat == 0) Color(0xFF2A2A2A) else Color(0xFF1E1E1E),
+                        start = Offset(bx, size.height - tickH),
+                        end   = Offset(bx, size.height),
+                        strokeWidth = if (beat == 0) 1f else 0.5f,
+                    )
+                }
+            }
         }
 
         if (track.kind == TrackKind.CLICK) {

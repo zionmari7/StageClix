@@ -174,6 +174,15 @@ JFUNC(void, nativeSetSections)(JNIEnv* env, jobject, jlong handle,
     env->ReleaseIntArrayElements(voiceCueIds, idsPtr,  JNI_ABORT);
 }
 
+JFUNC(void, nativeSetClickClipRanges)(JNIEnv* env, jobject, jlong handle,
+    jintArray startBars, jintArray durations, jint count) {
+    jint* startsPtr   = env->GetIntArrayElements(startBars, nullptr);
+    jint* durationsPtr = env->GetIntArrayElements(durations, nullptr);
+    engine(handle)->setClickClipRanges(startsPtr, durationsPtr, static_cast<int>(count));
+    env->ReleaseIntArrayElements(startBars,  startsPtr,    JNI_ABORT);
+    env->ReleaseIntArrayElements(durations,  durationsPtr, JNI_ABORT);
+}
+
 JFUNC(void, nativeSetVoiceCueVolume)(JNIEnv*, jobject, jlong handle, jfloat volume) {
     engine(handle)->setVoiceCueVolume(static_cast<float>(volume));
 }

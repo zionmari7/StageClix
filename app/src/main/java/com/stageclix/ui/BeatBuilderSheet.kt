@@ -390,7 +390,7 @@ fun BeatBuilderSheet(
                             )
                             val clip = ClickClip(
                                 startBar = 0,
-                                durationBars = 8,
+                                durationBars = 1,
                                 pattern = pattern,
                             )
                             onConfirm(clip)
