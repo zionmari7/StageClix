@@ -99,7 +99,8 @@ import com.stageclix.viewmodel.PlayerViewModel
 private const val TRACK_HEADER_WIDTH_DP = 72
 private const val RULER_HEIGHT_DP       = 24
 private const val TRACK_HEIGHT_DP       = 56
-private const val PX_PER_BAR            = 80f
+private val       BAR_WIDTH             = 80.dp   // dp value — use for Box width/offset
+// Canvas DrawScope uses pixels: derive barPx = size.width / totalBars inside each Canvas
 
 // ── Main screen ───────────────────────────────────────
 
@@ -115,15 +116,17 @@ fun TimelineScreen(
 
     val currentSong = song ?: return
 
-    val scrollState   = rememberScrollState()
+    val scrollState    = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
-    var laneWidthPx   by remember { mutableStateOf(0) }
+    val density        = LocalDensity.current
+    val barWidthPx     = with(density) { BAR_WIDTH.toPx() }
+    var laneWidthPx    by remember { mutableStateOf(0) }
     var showBeatBuilder by remember { mutableStateOf(false) }
 
     LaunchedEffect(positionBeats, isPlaying) {
         if (!isPlaying) return@LaunchedEffect
         val beatsPerBar = currentSong.timeSigNumerator.coerceAtLeast(1)
-        val playheadPx  = (positionBeats / beatsPerBar) * PX_PER_BAR
+        val playheadPx  = (positionBeats / beatsPerBar) * barWidthPx
         val target      = (playheadPx - laneWidthPx / 2f).toInt().coerceAtLeast(0)
         coroutineScope.launch {
             scrollState.animateScrollTo(target, animationSpec = tween(durationMillis = 100))
@@ -186,8 +189,8 @@ fun TimelineScreen(
                         .fillMaxSize()
                         .horizontalScroll(scrollState),
                 ) {
-                    val totalBars = currentSong.totalBars.coerceAtLeast(32)
-                    val totalWidth = (totalBars * PX_PER_BAR).dp
+                    val totalBars  = currentSong.totalBars.coerceAtLeast(32)
+                    val totalWidth = BAR_WIDTH * totalBars
 
                     TimelineRuler(
                         totalBars     = totalBars,
@@ -476,13 +479,16 @@ fun TimelineRuler(
     val safeBars = beatsPerBar.coerceAtLeast(1)
 
     Canvas(modifier = modifier.background(Color(0xFF181818))) {
+        val barPx     = size.width / totalBars.toFloat()
+        val beatPx    = barPx / safeBars
+
         for (bar in 0..totalBars) {
-            val x = bar * PX_PER_BAR
+            val x = bar * barPx
             if (bar < totalBars) {
                 drawRect(
                     color = if (bar % 2 == 0) Color(0xFF1C1C1C) else Color(0xFF181818),
                     topLeft = Offset(x, 0f),
-                    size = Size(PX_PER_BAR, size.height),
+                    size = Size(barPx, size.height),
                 )
             }
             if (bar > 0) {
@@ -494,9 +500,8 @@ fun TimelineRuler(
                 )
             }
             drawLine(color = Color(0xFF333333), start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.5f)
-            val pxPerBeat = PX_PER_BAR / safeBars
             for (beat in 1 until safeBars) {
-                val bx = x + beat * pxPerBeat
+                val bx = x + beat * beatPx
                 drawLine(color = Color(0xFF2A2A2A), start = Offset(bx, size.height * 0.5f), end = Offset(bx, size.height), strokeWidth = 0.5f)
                 drawText(
                     textMeasurer = textMeasurer,
@@ -506,9 +511,9 @@ fun TimelineRuler(
                 )
             }
         }
-        val px = (positionBeats / safeBars) * PX_PER_BAR
-        drawLine(color = Color(0xFFE8A020), start = Offset(px.toFloat(), 0f), end = Offset(px.toFloat(), size.height), strokeWidth = 1.5f)
-        drawRect(color = Color(0xFFE8A020), topLeft = Offset(px.toFloat() - 4f, 0f), size = Size(8f, 6f))
+        val phX = ((positionBeats / safeBars) * barPx).toFloat()
+        drawLine(color = Color(0xFFE8A020), start = Offset(phX, 0f), end = Offset(phX, size.height), strokeWidth = 1.5f)
+        drawRect(color = Color(0xFFE8A020), topLeft = Offset(phX - 4f, 0f), size = Size(8f, 6f))
     }
 }
 
@@ -531,16 +536,17 @@ fun TrackLane(
 
     Box(modifier = modifier.background(bgColor)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val pxPerBeat  = PX_PER_BAR / beatsPerBar
-            val pxPer16th  = PX_PER_BAR / (beatsPerBar * 4)
+            val barPx     = size.width / totalBars.toFloat()
+            val beatPx    = barPx / beatsPerBar
+            val pxPer16th = barPx / (beatsPerBar * 4)
 
             for (bar in 0..totalBars) {
-                val x = bar * PX_PER_BAR
+                val x = bar * barPx
                 val barBg = if (bar % 2 == 0) Color(0xFF141414) else Color(0xFF101010)
-                drawRect(color = barBg, topLeft = Offset(x, 0f), size = Size(PX_PER_BAR, size.height))
+                drawRect(color = barBg, topLeft = Offset(x, 0f), size = Size(barPx, size.height))
                 drawLine(color = Color(0xFF2A2A2A), start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.5f)
                 for (beat in 1 until beatsPerBar) {
-                    val bx = x + beat * pxPerBeat
+                    val bx = x + beat * beatPx
                     drawLine(color = Color(0xFF222222), start = Offset(bx, 0f), end = Offset(bx, size.height), strokeWidth = 1f)
                 }
                 for (sixteenth in 1 until beatsPerBar * 4) {
@@ -550,8 +556,8 @@ fun TrackLane(
                 }
             }
 
-            val px = (positionBeats / beatsPerBar) * PX_PER_BAR
-            drawLine(color = Color(0xFFE8A020), start = Offset(px.toFloat(), 0f), end = Offset(px.toFloat(), size.height), strokeWidth = 1.5f)
+            val phX = (positionBeats / beatsPerBar) * barPx
+            drawLine(color = Color(0xFFE8A020), start = Offset(phX.toFloat(), 0f), end = Offset(phX.toFloat(), size.height), strokeWidth = 1.5f)
         }
 
         Canvas(
@@ -561,10 +567,11 @@ fun TrackLane(
                 .background(Color(0xFF161616))
                 .align(Alignment.TopStart),
         ) {
-            val pxPerBeat = PX_PER_BAR / beatsPerBar
+            val barPx  = size.width / totalBars.toFloat()
+            val beatPx = barPx / beatsPerBar
             for (bar in 0..totalBars) {
                 for (beat in 0 until beatsPerBar) {
-                    val bx = bar * PX_PER_BAR + beat * pxPerBeat
+                    val bx    = bar * barPx + beat * beatPx
                     val tickH = if (beat == 0) size.height else size.height * 0.5f
                     drawLine(
                         color = if (beat == 0) Color(0xFF2A2A2A) else Color(0xFF1E1E1E),
@@ -604,9 +611,8 @@ private fun ClickClipBlock(
     beatsPerBar: Int,
     onResized: (ClickClip) -> Unit,
 ) {
-    // Convert the dp-per-bar constant to layout pixels so the drag threshold is
-    // density-aware (dragAmount.x from detectDragGestures is in layout px, not dp).
-    val pxPerBar = with(LocalDensity.current) { PX_PER_BAR.dp.toPx() }
+    // barWidthPx: actual pixels per bar (dp → px). detectDragGestures reports in layout px.
+    val barWidthPx    = with(LocalDensity.current) { BAR_WIDTH.toPx() }
     var durationBars by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
     // Plain float array — not observable state, so it doesn't cause extra recompositions
     // on every drag event (only durationBars changes need to recompose).
@@ -615,10 +621,9 @@ private fun ClickClipBlock(
     Box(
         modifier = Modifier
             .padding(top = 4.dp, bottom = 4.dp)
-            // Layout offset (not graphical): moves the composable in the layout pass so
-            // the drag handle's hit-test area is at the correct on-screen position.
-            .offset(x = (clip.startBar * PX_PER_BAR).dp)
-            .width((durationBars * PX_PER_BAR).dp)
+            // Layout offset in dp — keeps hit-test region aligned with visual position.
+            .offset(x = BAR_WIDTH * clip.startBar)
+            .width(BAR_WIDTH * durationBars)
             .fillMaxHeight()
             .background(Color(0xFF1A3A1A), RoundedCornerShape(3.dp))
             .border(1.dp, Color(0xFF2AB02A), RoundedCornerShape(3.dp)),
@@ -683,10 +688,10 @@ private fun ClickClipBlock(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             dragAccumulator[0] += dragAmount.x
-                            val barsMoved = (dragAccumulator[0] / pxPerBar).toInt()
+                            val barsMoved = (dragAccumulator[0] / barWidthPx).toInt()
                             if (barsMoved != 0) {
                                 durationBars = (durationBars + barsMoved).coerceAtLeast(1f)
-                                dragAccumulator[0] -= barsMoved * pxPerBar
+                                dragAccumulator[0] -= barsMoved * barWidthPx
                             }
                         },
                     )
@@ -697,12 +702,11 @@ private fun ClickClipBlock(
 
 @Composable
 private fun VoiceCueClipBlock(clip: VoiceCueClip) {
-    val pxPerBar = PX_PER_BAR
     Box(
         modifier = Modifier
             .padding(top = 5.dp, bottom = 5.dp)
-            .offset { IntOffset(x = (clip.startBar * pxPerBar).toInt(), y = 0) }
-            .width((pxPerBar * 1.5f).dp)
+            .offset(x = BAR_WIDTH * clip.startBar)
+            .width(BAR_WIDTH * 1.5f)
             .fillMaxHeight()
             .background(Color(0xFF1A1A3A), RoundedCornerShape(3.dp))
             .border(0.5.dp, Color(0xFF3A3AD5), RoundedCornerShape(3.dp))
