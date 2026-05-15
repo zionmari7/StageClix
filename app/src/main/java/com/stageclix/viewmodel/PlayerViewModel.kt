@@ -225,6 +225,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         updateClickTrack { track ->
             track.copy(clickClips = track.clickClips + clip)
         }
+        val clipCount = activeSong.value
+            ?.tracks?.find { it.kind == TrackKind.CLICK }
+            ?.clickClips?.size
+        Log.d("StageClix", "Click track now has $clipCount clips")
         viewModelScope.launch {
             applyBeatPatternToEngine(clip.pattern)
             Log.d("StageClix", "Applied beat pattern: ${clip.pattern.cells.size} cells")
