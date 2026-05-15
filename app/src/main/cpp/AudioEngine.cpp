@@ -79,7 +79,10 @@ bool AudioEngine::start(int deviceId) {
     mLastQuarterNum   = -1;
     mLastEighthNum    = -1;
     mLastSixteenthNum = -1;
-    mLastFiredBar.store(-1, std::memory_order_relaxed);
+    mCurrentBar.store(-1, std::memory_order_relaxed);
+    mCurrentBeat.store(-1, std::memory_order_relaxed);
+    mCueFiredThisBar.store(false, std::memory_order_relaxed);
+    mCountFiredThisBeat.store(false, std::memory_order_relaxed);
     mAtomicFramePos.store(0, std::memory_order_relaxed);
     mAccentHead = {};
     mClickHead  = {};
@@ -104,12 +107,19 @@ void AudioEngine::stop() {
 void AudioEngine::play() {
     LOGI("play() called — mIsPlaying -> true");
     mIsPlaying = true;
+    mBackingMixer->play();
 }
 
-void AudioEngine::pause() { mIsPlaying = false; }
+void AudioEngine::pause() { mIsPlaying = false; mBackingMixer->pause(); }
 
 void AudioEngine::rewind() {
     mIsPlaying = false;
+    mCurrentBar.store(-1, std::memory_order_relaxed);
+    mCurrentBeat.store(-1, std::memory_order_relaxed);
+    mCueFiredThisBar.store(false, std::memory_order_relaxed);
+    mCountFiredThisBeat.store(false, std::memory_order_relaxed);
+    mVoiceCuePlayer->reset();
+    mBackingMixer->rewind();
     mRewindRequested.store(true, std::memory_order_release);
 }
 
@@ -123,6 +133,25 @@ void AudioEngine::setBpm(double bpm) {
 void AudioEngine::setTimeSignature(int numerator, int denominator) {
     if (numerator   > 0) mNumerator   = numerator;
     if (denominator > 0) mDenominator = denominator;
+}
+
+void AudioEngine::setBeatPattern(
+    const BeatEvent* events,
+    int count,
+    int timeSigNumerator,
+    double bpm
+) {
+    std::vector<BeatEvent> pattern;
+    if (events && count > 0) {
+        pattern.assign(events, events + count);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mBeatPatternMutex);
+        mBeatPattern = std::move(pattern);
+    }
+    setTimeSignature(timeSigNumerator, mDenominator.load(std::memory_order_relaxed));
+    setBpm(bpm);
+    mLastSixteenthNum = -1;
 }
 
 void AudioEngine::setClickEnabled(bool enabled)     { mClickEnabled     = enabled; }
@@ -204,15 +233,25 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     swapPendingBuffers();
 
+    if (mSectionsDirty.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(mSectionsMutex);
+        mSectionsActive = mSectionsPending;
+        mSectionsDirty.store(false, std::memory_order_relaxed);
+    }
+
     if (mRewindRequested.exchange(false, std::memory_order_acq_rel)) {
         mCurrentFrame     = 0;
         mLastQuarterNum   = -1;
         mLastEighthNum    = -1;
         mLastSixteenthNum = -1;
-        mLastFiredBar.store(-1, std::memory_order_relaxed);
+        mCurrentBar.store(-1, std::memory_order_relaxed);
+        mCurrentBeat.store(-1, std::memory_order_relaxed);
+        mCueFiredThisBar.store(false, std::memory_order_relaxed);
+        mCountFiredThisBeat.store(false, std::memory_order_relaxed);
         mAtomicFramePos.store(0, std::memory_order_relaxed);
         mAccentHead = {};
         mClickHead  = {};
+        mVoiceCuePlayer->reset();
     }
 
     const bool   playing          = mIsPlaying.load(std::memory_order_relaxed);
@@ -241,39 +280,60 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     std::fill_n(mCueMixBuf.data(),   numFrames, 0.0f);
     std::fill_n(mVoiceMixBuf.data(), numFrames, 0.0f);
 
+    std::vector<BeatEvent> beatPattern;
+    {
+        std::lock_guard<std::mutex> lock(mBeatPatternMutex);
+        beatPattern = mBeatPattern;
+    }
+
     // ── Channel 0: click track (accent + beat ticks) ──────────────────────────
     for (int32_t i = 0; i < numFrames; ++i) {
         float sample = 0.0f;
 
         if (playing && clickEnabled) {
-            int64_t frame        = mCurrentFrame + i;
-            int64_t quarterNum   = static_cast<int64_t>(static_cast<double>(frame) / framesPerBeat);
-            int64_t eighthNum    = static_cast<int64_t>(static_cast<double>(frame) / (framesPerBeat * 0.5));
-            int64_t sixteenthNum = static_cast<int64_t>(static_cast<double>(frame) / (framesPerBeat * 0.25));
+            int64_t frame = mCurrentFrame + i;
+            int64_t sixteenthNum =
+                static_cast<int64_t>(static_cast<double>(frame) / (framesPerBeat * 0.25));
 
-            if (quarterNum != mLastQuarterNum) {
-                mLastQuarterNum   = quarterNum;
-                mLastEighthNum    = eighthNum;
+            if (sixteenthNum != mLastSixteenthNum) {
                 mLastSixteenthNum = sixteenthNum;
-                int barBeat = static_cast<int>(quarterNum % numerator);
-                if (barBeat == 0) {
-                    if (accentEnabled && mAccentBuf)
-                        mAccentHead = {mAccentBuf, 0, accentVol * masterVol, true, 0};
-                    if (quarterEnabled && mClickBuf)
-                        mClickHead = {mClickBuf, 0, quarterVol * masterVol, true, 1};
-                } else {
-                    if (quarterEnabled && mClickBuf)
-                        mClickHead = {mClickBuf, 0, quarterVol * masterVol, true, 1};
+                double posBeats = static_cast<double>(frame) / framesPerBeat;
+                int timeSigNum = std::max(numerator, 1);
+                double totalSixteenths = posBeats * 4.0;
+                int barSixteenths = timeSigNum * 4;
+                int posInBar = static_cast<int>(totalSixteenths) % barSixteenths;
+
+                for (auto& event : beatPattern) {
+                    int eventPos = event.beatIndex * 4;
+                    if (event.row == 1)
+                        eventPos = event.beatIndex * 4;
+                    else if (event.row == 2)
+                        eventPos = event.beatIndex * 4 + event.subIndex * 2;
+                    else if (event.row == 3)
+                        eventPos = event.beatIndex * 4 + event.subIndex;
+
+                    if (posInBar == eventPos) {
+                        float gain = 1.0f;
+                        bool tierOn = true;
+                        if (event.row == 0) {
+                            tierOn = accentEnabled;
+                            gain = accentVol * masterVol;
+                        } else if (event.row == 1) {
+                            tierOn = quarterEnabled;
+                            gain = quarterVol * masterVol;
+                        } else if (event.row == 2) {
+                            tierOn = eighthEnabled;
+                            gain = eighthVol * masterVol;
+                        } else if (event.row == 3) {
+                            tierOn = sixteenthEnabled;
+                            gain = sixteenthVol * masterVol;
+                        }
+                        if (tierOn && mClickBuf)
+                            mClickHead = {mClickBuf, 0, gain, true, event.row};
+                        if (event.row == 0 && accentEnabled && mAccentBuf)
+                            mAccentHead = {mAccentBuf, 0, accentVol * masterVol, true, 0};
+                    }
                 }
-            } else if (eighthNum != mLastEighthNum) {
-                mLastEighthNum    = eighthNum;
-                mLastSixteenthNum = sixteenthNum;
-                if (eighthEnabled && mClickBuf)
-                    mClickHead = {mClickBuf, 0, eighthVol * masterVol, true, 2};
-            } else if (sixteenthNum != mLastSixteenthNum) {
-                mLastSixteenthNum = sixteenthNum;
-                if (sixteenthEnabled && mClickBuf)
-                    mClickHead = {mClickBuf, 0, sixteenthVol * masterVol, true, 3};
             }
         }
 
@@ -297,23 +357,52 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         mClickMixBuf[i] = softClip(sample);
     }
 
-    // ── Channel 1: cue audio (FilePlayer — reserved, currently silent) ────────
+    // ── Channel 1: cue / backing audio (BackingMixer) ────────────────────────
+    mBackingMixer->render(mCueMixBuf.data(), numFrames, 1);
 
-    // ── Voice cue bar-change check (fires 1 bar early as a heads-up) ─────────
+    // ── Voice cue beat-accurate trigger ──────────────────────────────────────
     if (playing) {
-        double currentBeat = static_cast<double>(mCurrentFrame) / framesPerBeat;
-        int currentBar = static_cast<int>(currentBeat / numerator);
-        if (currentBar != mLastFiredBar.load(std::memory_order_relaxed)) {
-            mLastFiredBar.store(currentBar, std::memory_order_relaxed);
-            int lookAheadBar = currentBar + 1;
-            if (mTimelineMutex.try_lock()) {
-                for (auto& event : mCueTimeline) {
-                    if (event.first == lookAheadBar) {
-                        mVoiceCuePlayer->trigger(event.second);
-                        break;
-                    }
-                }
-                mTimelineMutex.unlock();
+        double totalBeats = static_cast<double>(mCurrentFrame) / framesPerBeat;
+        int newBar  = static_cast<int>(totalBeats / numerator) + 1; // 1-indexed
+        int newBeat = static_cast<int>(totalBeats) % numerator;     // 0-indexed
+
+        if (newBar != mCurrentBar.load(std::memory_order_relaxed)) {
+            mCurrentBar.store(newBar, std::memory_order_relaxed);
+            mCueFiredThisBar.store(false, std::memory_order_relaxed);
+            LOGI("Bar: %d Beat: %d", newBar, newBeat);
+        }
+
+        bool beatChanged = (newBeat != mCurrentBeat.load(std::memory_order_relaxed));
+        if (beatChanged) {
+            mCurrentBeat.store(newBeat, std::memory_order_relaxed);
+            mCountFiredThisBeat.store(false, std::memory_order_relaxed);
+        }
+
+        for (auto& section : mSectionsActive) {
+            int N        = section.sectionBar;
+            int cueBar   = N - 2;
+            int countBar = N - 1;
+
+            // CUE BAR: fire section voice cue on beat 3 (0-indexed beat 2)
+            if (newBar == cueBar &&
+                newBeat == 2 &&
+                !mCueFiredThisBar.load(std::memory_order_relaxed)) {
+                mCueFiredThisBar.store(true, std::memory_order_relaxed);
+                mVoiceCuePlayer->trigger(section.voiceCueId);
+                LOGI("Fired voice cue id=%d at bar=%d beat=3",
+                     section.voiceCueId, newBar);
+            }
+
+            // COUNT BAR: fire count cue on each beat change
+            if (newBar == countBar &&
+                beatChanged &&
+                !mCountFiredThisBeat.load(std::memory_order_relaxed) &&
+                newBeat < numerator) {
+                mCountFiredThisBeat.store(true, std::memory_order_relaxed);
+                // newBeat 0→vc_1(id=0), 1→vc_2(id=1), etc.
+                mVoiceCuePlayer->trigger(newBeat);
+                LOGI("Fired count vc_%d at bar=%d beat=%d",
+                     newBeat + 1, newBar, newBeat + 1);
             }
         }
     }
@@ -323,7 +412,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     // ── Interleave the 3 mono channels into the Oboe output buffer ───────────
     // 3+ ch: Ch0=click  Ch1=cue  Ch2=voice  (extra channels silenced)
-    //    2ch: Ch0=click  Ch1=cue+voice mixed
+    //    2ch: Ch0=click+voice  Ch1=cue
     //    1ch: everything mixed to mono
     auto* out = static_cast<float*>(audioData);
     for (int32_t f = 0; f < numFrames; ++f) {
@@ -334,8 +423,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             for (int32_t c = 3; c < mChannelCount; ++c)
                 out[f * mChannelCount + c] = 0.0f;
         } else if (mChannelCount == 2) {
-            out[f * 2 + 0] = mClickMixBuf[f];
-            out[f * 2 + 1] = softClip(mCueMixBuf[f] + mVoiceMixBuf[f]);
+            // Ch0 = click + voice cues (drummer's IEM)
+            // Ch1 = cue audio (backing track / conductor feed)
+            out[f * 2 + 0] = mClickMixBuf[f] + mVoiceMixBuf[f];
+            out[f * 2 + 1] = mCueMixBuf[f];
         } else {
             out[f] = softClip(mClickMixBuf[f] + mCueMixBuf[f] + mVoiceMixBuf[f]);
         }
@@ -365,17 +456,36 @@ void AudioEngine::onErrorAfterClose(oboe::AudioStream* /*stream*/, oboe::Result 
     start(0);
 }
 
+// Legacy single-file cue wrappers — delegate to BackingMixer track 0.
+void AudioEngine::setCueData(const float* pcm, int32_t frameCount, int32_t channelCount) {
+    mBackingMixer->setTrackData(0, pcm, frameCount, channelCount);
+}
+void AudioEngine::setCueVolume(float volume) { mBackingMixer->setTrackVolume(0, volume); }
+void AudioEngine::setCueMuted(bool muted)    { mBackingMixer->setTrackMuted(0, muted);   }
+void AudioEngine::playCue()                  { mBackingMixer->play();                    }
+void AudioEngine::pauseCue()                 { mBackingMixer->pause();                   }
+void AudioEngine::rewindCue()                { mBackingMixer->rewind();                  }
+
+int  AudioEngine::addBackingTrack()                   { return mBackingMixer->addTrack(); }
+void AudioEngine::removeBackingTrack(int index)       { mBackingMixer->removeTrack(index); }
+void AudioEngine::setBackingTrackData(int index, const float* pcm, int32_t frames, int32_t channels) {
+    mBackingMixer->setTrackData(index, pcm, frames, channels);
+}
+void AudioEngine::setBackingTrackVolume(int index, float vol)  { mBackingMixer->setTrackVolume(index, vol);  }
+void AudioEngine::setBackingTrackMuted(int index, bool muted)  { mBackingMixer->setTrackMuted(index, muted); }
+
 void AudioEngine::loadVoiceCue(int cueId, const float* pcm, int frameCount) {
     mVoiceCuePlayer->loadCue(cueId, pcm, frameCount);
 }
 
-void AudioEngine::setCueTimeline(const int* bars, const int* cueIds, int count) {
-    std::vector<std::pair<int,int>> timeline;
-    timeline.reserve(count);
+void AudioEngine::setSections(const int* sectionBars, const int* voiceCueIds, int count) {
+    std::vector<VoiceCueSection> sections;
+    sections.reserve(count);
     for (int i = 0; i < count; ++i)
-        timeline.emplace_back(bars[i], cueIds[i]);
-    std::lock_guard<std::mutex> lock(mTimelineMutex);
-    mCueTimeline = std::move(timeline);
+        sections.push_back({sectionBars[i], voiceCueIds[i]});
+    std::lock_guard<std::mutex> lock(mSectionsMutex);
+    mSectionsPending = std::move(sections);
+    mSectionsDirty.store(true, std::memory_order_relaxed);
 }
 
 void AudioEngine::setVoiceCueVolume(float volume) {

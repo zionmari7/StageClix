@@ -7,7 +7,19 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include "BackingMixer.h"
 #include "VoiceCuePlayer.h"
+
+struct VoiceCueSection {
+    int sectionBar;
+    int voiceCueId;
+};
+
+struct BeatEvent {
+    int beatIndex;   // 0-based beat in bar
+    int row;         // 0=ACC 1=QTR 2=8TH 3=16TH
+    int subIndex;    // subdivision within beat
+};
 
 struct SampleBuffer {
     float* data;
@@ -33,6 +45,12 @@ public:
 
     void   setBpm(double bpm);
     void   setTimeSignature(int numerator, int denominator);
+    void   setBeatPattern(
+        const BeatEvent* events,
+        int count,
+        int timeSigNumerator,
+        double bpm
+    );
 
     void   setClickEnabled(bool enabled);
     void   setClickSample(const float* pcm, int length);
@@ -53,8 +71,21 @@ public:
     void   setBeatEnabled(bool enabled);
     void   setBeatVolume(float volume);
 
+    void   setCueData(const float* pcm, int32_t frameCount, int32_t channelCount);
+    void   setCueVolume(float volume);
+    void   setCueMuted(bool muted);
+    void   playCue();
+    void   pauseCue();
+    void   rewindCue();
+
+    int    addBackingTrack();
+    void   removeBackingTrack(int index);
+    void   setBackingTrackData(int index, const float* pcm, int32_t frames, int32_t channels);
+    void   setBackingTrackVolume(int index, float vol);
+    void   setBackingTrackMuted(int index, bool muted);
+
     void   loadVoiceCue(int cueId, const float* pcm, int frameCount);
-    void   setCueTimeline(const int* bars, const int* cueIds, int count);
+    void   setSections(const int* sectionBars, const int* voiceCueIds, int count);
     void   setVoiceCueVolume(float volume);
     void   setVoiceCueMuted(bool muted);
 
@@ -97,10 +128,19 @@ private:
     SampleBuffer* mAccentBuf{nullptr};
     SampleBuffer* mClickBuf{nullptr};
 
+    std::unique_ptr<BackingMixer>     mBackingMixer{new BackingMixer()};
     std::unique_ptr<VoiceCuePlayer>  mVoiceCuePlayer{new VoiceCuePlayer()};
-    std::vector<std::pair<int,int>>  mCueTimeline;
-    std::mutex                       mTimelineMutex;
-    std::atomic<int>                 mLastFiredBar{-1};
+    std::vector<VoiceCueSection>     mSectionsPending;
+    std::vector<VoiceCueSection>     mSectionsActive;
+    std::atomic<bool>                mSectionsDirty{false};
+    std::mutex                       mSectionsMutex;
+    std::vector<BeatEvent>           mBeatPattern;
+    std::mutex                       mBeatPatternMutex;
+
+    std::atomic<int>  mCurrentBar{-1};
+    std::atomic<int>  mCurrentBeat{-1};
+    std::atomic<bool> mCueFiredThisBar{false};
+    std::atomic<bool> mCountFiredThisBeat{false};
 
     std::vector<float> mClickMixBuf;
     std::vector<float> mCueMixBuf;

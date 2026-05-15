@@ -1,7 +1,138 @@
 package com.stageclix.data
 
 import com.example.stageclix.R
+import kotlinx.serialization.Serializable
 import java.util.UUID
+
+// ── Beat grid ─────────────────────────────────────────
+
+/**
+ * Represents one cell in the beat builder grid.
+ * Each cell has a position: row (ACC/QTR/8TH/16TH)
+ * and a subdivision index within that row.
+ *
+ * ACC row: 1 cell per beat  → subIndex always 0
+ * QTR row: 1 cell per beat  → subIndex always 0
+ * 8TH row: 2 cells per beat → subIndex 0 or 1
+ * 16TH row: 4 cells per beat → subIndex 0,1,2,3
+ */
+enum class NoteRow { ACC, QTR, EIGHTH, SIXTEENTH }
+
+@Serializable
+data class BeatCell(
+    val beatIndex: Int,    // 0-based beat in bar (0=beat1)
+    val row: NoteRow,
+    val subIndex: Int = 0, // subdivision within beat
+    val enabled: Boolean = true,
+)
+
+/**
+ * A custom 1-bar beat pattern built in the beat builder.
+ * The engine loops this pattern for however many bars
+ * the clip covers on the timeline.
+ */
+@Serializable
+data class BeatPattern(
+    val id: String = UUID.randomUUID().toString(),
+    val cells: List<BeatCell> = emptyList(),
+    val clickType: ClickType = ClickType.WOODBLOCK,
+    val timeSigNumerator: Int = 4,
+    val timeSigDenominator: Int = 4,
+    val bpm: Double = 120.0,
+)
+
+// ── Timeline clips ────────────────────────────────────
+
+@Serializable
+data class ClickClip(
+    val id: String = UUID.randomUUID().toString(),
+    val startBar: Int = 0,      // 0-based bar on timeline
+    val durationBars: Int = 8,  // draggable right edge
+    val pattern: BeatPattern = BeatPattern(),
+)
+
+@Serializable
+data class VoiceCueClip(
+    val id: String = UUID.randomUUID().toString(),
+    val startBar: Int = 0,
+    val voiceCue: VoiceCue = VoiceCue.VC_INTRO,
+    val label: String = "",
+)
+
+@Serializable
+data class BackingClip(
+    val id: String = UUID.randomUUID().toString(),
+    val startBar: Int = 0,
+    val durationBars: Int = 8,
+    val fileUri: String = "",
+    val fileName: String = "",
+    val engineIndex: Int = -1,
+)
+
+// ── Track ─────────────────────────────────────────────
+
+@Serializable
+data class Track(
+    val id: String = UUID.randomUUID().toString(),
+    val kind: TrackKind,
+    val name: String,
+    val volume: Float = 1.0f,
+    val muted: Boolean = false,
+    val clickClips: List<ClickClip> = emptyList(),
+    val voiceCueClips: List<VoiceCueClip> = emptyList(),
+    val backingClips: List<BackingClip> = emptyList(),
+)
+
+enum class TrackKind { CLICK, VOICE_CUE, BACKING }
+
+// ── Song ──────────────────────────────────────────────
+
+@Serializable
+data class Song(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "New Song",
+    val bpm: Double = 120.0,
+    val timeSigNumerator: Int = 4,
+    val timeSigDenominator: Int = 4,
+    val totalBars: Int = 32,
+    val tracks: List<Track> = listOf(
+        Track(
+            kind = TrackKind.CLICK,
+            name = "Click",
+        ),
+        Track(
+            kind = TrackKind.VOICE_CUE,
+            name = "Cues",
+        ),
+        Track(
+            kind = TrackKind.BACKING,
+            name = "Backing",
+        ),
+    ),
+    val beatMixer: BeatMixerState = BeatMixerState(),
+    val voiceCueVolume: Float = 1.0f,
+    val voiceCueMuted: Boolean = false,
+)
+
+// ── Setlist ───────────────────────────────────────────
+
+@Serializable
+data class Setlist(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "New Setlist",
+    val songs: List<Song> = emptyList(),
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastUsed: Long = System.currentTimeMillis(),
+)
+
+@Serializable
+data class AppData(
+    val setlists: List<Setlist> = emptyList(),
+    val activeSetlistId: String = "",
+    val activeSongId: String = "",
+)
+
+// ── Existing types (unchanged) ────────────────────────
 
 enum class BeatMode(val displayName: String) {
     QUARTER("Quarter"),
@@ -49,14 +180,15 @@ enum class ClickType(val displayName: String, val sounds: Map<BeatMode, Int>) {
     )),
 }
 
+@Serializable
 data class BeatMixerState(
     val accentEnabled: Boolean    = true,
     val accentVolume: Float       = 1.0f,
     val quarterEnabled: Boolean   = true,
     val quarterVolume: Float      = 0.85f,
-    val eighthEnabled: Boolean    = true,
+    val eighthEnabled: Boolean    = false,
     val eighthVolume: Float       = 0.55f,
-    val sixteenthEnabled: Boolean = true,
+    val sixteenthEnabled: Boolean = false,
     val sixteenthVolume: Float    = 0.35f,
     val masterVolume: Float       = 0.8f,
 )
@@ -96,9 +228,9 @@ enum class VoiceCue(val displayName: String, val rawResId: Int) {
     VC_INSTRUMENTAL("Instrumental", R.raw.vc_instrumental),
     VC_INTERLUDE("Interlude", R.raw.vc_interlude),
     VC_INTRO("Intro", R.raw.vc_intro),
+    VC_KEYS("Keys", R.raw.vc_keys),
     VC_KEY_CHANGE_DOWN("Key Change Down", R.raw.vc_key_change_down),
     VC_KEY_CHANGE_UP("Key Change Up", R.raw.vc_key_change_up),
-    VC_KEYS("Keys", R.raw.vc_keys),
     VC_LAST_TIME("Last Time", R.raw.vc_last_time),
     VC_OUTRO("Outro", R.raw.vc_outro),
     VC_POST_CHORUS("Post Chorus", R.raw.vc_post_chorus),
@@ -131,22 +263,4 @@ data class VoiceCueEvent(
     val voiceCue: VoiceCue,
     val triggerBar: Int,
     val label: String = voiceCue.displayName,
-)
-
-data class Song(
-    val id: String                        = UUID.randomUUID().toString(),
-    val bpm: Double                       = 120.0,
-    val timeSigNumerator: Int             = 4,
-    val timeSigDenominator: Int           = 4,
-    val clickType: ClickType              = ClickType.CLASSIC,
-    val clickEnabled: Boolean             = true,
-    val accentEnabled: Boolean            = true,
-    val accentVolume: Float               = 1.0f,
-    val beatEnabled: Boolean              = true,
-    val beatVolume: Float                 = 0.85f,
-    val masterVolume: Float               = 1.0f,
-    val beatMixer: BeatMixerState         = BeatMixerState(),
-    val voiceCueEvents: List<VoiceCueEvent> = emptyList(),
-    val voiceCueVolume: Float             = 1.0f,
-    val voiceCueMuted: Boolean            = false,
 )

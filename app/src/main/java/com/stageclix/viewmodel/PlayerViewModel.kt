@@ -1,83 +1,101 @@
 package com.stageclix.viewmodel
 
 import android.app.Application
-import android.util.Log
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.stageclix.audio.AudioEngineJni
-import com.stageclix.audio.SampleLoader
-import com.stageclix.audio.UsbAudioDeviceManager
-import com.stageclix.audio.VoiceCueLoader
-import com.stageclix.data.BeatMode
-import com.stageclix.data.ClickType
-import com.stageclix.data.Song
-import com.stageclix.data.VoiceCue
-import com.stageclix.data.VoiceCueEvent
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
+import com.stageclix.audio.*
+import com.stageclix.data.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
-class PlayerViewModel(application: Application) : AndroidViewModel(application) {
+class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val engine     = AudioEngineJni()
-    private val usbManager = UsbAudioDeviceManager(application)
+    // ── Engine ─────────────────────────────────────────
+    private val engine = AudioEngineJni().also {
+        it.create()
+    }
+    val usbManager = UsbAudioDeviceManager(app)
+    private val dataStore = AppDataStore(app)
 
-    companion object { private const val TAG = "StageClix" }
+    // ── App state ───────────────────────────────────────
+    private val _appData = MutableStateFlow(AppData())
+    val appData: StateFlow<AppData> = _appData.asStateFlow()
 
-    private val _currentSong  = MutableStateFlow(Song())
-    val currentSong: StateFlow<Song> = _currentSong.asStateFlow()
+    val activeSetlist: StateFlow<Setlist?> =
+        _appData.map { data ->
+            data.setlists.find { it.id == data.activeSetlistId }
+                ?: data.setlists.firstOrNull()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    private val _isPlaying    = MutableStateFlow(false)
+    val activeSong: StateFlow<Song?> =
+        combine(_appData, activeSetlist) { data, setlist ->
+            setlist?.songs?.find { it.id == data.activeSongId }
+                ?: setlist?.songs?.firstOrNull()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // ── Transport ───────────────────────────────────────
+    private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
     private val _positionBeats = MutableStateFlow(0.0)
     val positionBeats: StateFlow<Double> = _positionBeats.asStateFlow()
 
-    val connectedUsbDevices: StateFlow<List<UsbAudioDeviceManager.UsbAudioDevice>> =
-        usbManager.connectedDevices
-    val selectedUsb: StateFlow<UsbAudioDeviceManager.UsbAudioDevice?> =
-        usbManager.selectedDevice
+    // ── USB ─────────────────────────────────────────────
+    val selectedUsb = usbManager.selectedDevice
+    val usbDevices = usbManager.connectedDevices
 
-    private var currentEngineDeviceId: Int = -1
-
-    private val tapTimes = ArrayDeque<Long>()
-    private var sampleLoadJob: Job? = null
+    // ── Tap tempo ───────────────────────────────────────
+    private val tapTimes = mutableListOf<Long>()
 
     init {
-        Log.d(TAG, "init: calling engine.create()")
-        engine.create()
-        val started = engine.start(deviceId = -1)
-        Log.d(TAG, "init: engine.start(-1) returned $started")
-        reloadSamples(currentSong.value.clickType)
-        viewModelScope.launch(Dispatchers.IO) {
-            VoiceCueLoader.loadAll(getApplication(), engine)
-        }
-        usbManager.start()
+        // Load saved data
         viewModelScope.launch {
-            usbManager.selectedDevice.collect { device ->
-                val newId = device?.deviceId ?: -1
-                if (newId != currentEngineDeviceId) {
-                    currentEngineDeviceId = newId
-                    Log.d(TAG, "USB device changed — restarting engine with deviceId=$newId")
+            dataStore.appDataFlow.collect { data ->
+                _appData.value = data
+            }
+        }
+
+        // Start engine
+        engine.start(-1)
+
+        // Start USB manager
+        usbManager.start()
+
+        // Restart engine on USB change
+        viewModelScope.launch {
+            usbManager.selectedDevice.collect { dev ->
+                if (dev != null) {
                     engine.stop()
-                    engine.start(deviceId = newId)
-                    reloadSamples(currentSong.value.clickType)
+                    engine.start(dev.deviceId)
                 }
             }
         }
-        startPositionPolling()
+
+        // Load voice cues
+        viewModelScope.launch(Dispatchers.IO) {
+            VoiceCueLoader.loadAll(app, engine)
+        }
+
+        // Poll position
+        viewModelScope.launch {
+            while (isActive) {
+                _positionBeats.value = engine.getPositionBeats()
+                delay(16)
+            }
+        }
+
+        // Apply song to engine when active song changes
+        viewModelScope.launch {
+            activeSong.collect { song ->
+                song?.let { applySongToEngine(it) }
+            }
+        }
     }
 
-    // ── Playback ──────────────────────────────────────────────────────────────
+    // ── Transport ───────────────────────────────────────
 
     fun play() {
-        Log.d(TAG, "play() called")
         engine.play()
         _isPlaying.value = true
     }
@@ -88,203 +106,285 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun rewind() {
-        engine.pause()
         engine.rewind()
         _isPlaying.value = false
         _positionBeats.value = 0.0
     }
 
-    // ── Tap tempo ─────────────────────────────────────────────────────────────
-
     fun onTap() {
         val now = System.currentTimeMillis()
-        if (tapTimes.isNotEmpty() && now - tapTimes.last() > 2_000L) {
+        if (tapTimes.isNotEmpty() && now - tapTimes.last() > 2000) {
             tapTimes.clear()
         }
-        tapTimes.addLast(now)
-        if (tapTimes.size > 8) tapTimes.removeFirst()
-
+        tapTimes.add(now)
         if (tapTimes.size >= 2) {
-            var totalInterval = 0L
-            for (i in 1 until tapTimes.size) totalInterval += tapTimes[i] - tapTimes[i - 1]
-            val avg = totalInterval.toDouble() / (tapTimes.size - 1)
-            val bpm = (60_000.0 / avg * 10.0).roundToInt() / 10.0
-            setBpm(bpm)
+            val avg = tapTimes.zipWithNext()
+                .map { (a, b) -> b - a }
+                .average()
+            val bpm = (60000.0 / avg).coerceIn(20.0, 300.0)
+            updateActiveSong { it.copy(bpm = Math.round(bpm * 10) / 10.0) }
+            engine.setBpm(bpm)
         }
     }
 
-    // ── Song settings ─────────────────────────────────────────────────────────
+    // ── Song / Setlist management ───────────────────────
+
+    fun selectSetlist(setlistId: String) {
+        updateAppData { data ->
+            val setlist = data.setlists.find { it.id == setlistId }
+            data.copy(
+                activeSetlistId = setlistId,
+                activeSongId = setlist?.songs?.firstOrNull()?.id ?: ""
+            )
+        }
+    }
+
+    fun selectSong(songId: String) {
+        rewind()
+        updateAppData { it.copy(activeSongId = songId) }
+    }
+
+    fun addSetlist(name: String) {
+        val newSetlist = Setlist(
+            name = name,
+            songs = listOf(Song(name = "Song 1"))
+        )
+        updateAppData { data ->
+            data.copy(
+                setlists = data.setlists + newSetlist,
+                activeSetlistId = newSetlist.id,
+                activeSongId = newSetlist.songs.first().id
+            )
+        }
+    }
+
+    fun renameSetlist(setlistId: String, name: String) {
+        updateSetlist(setlistId) { it.copy(name = name) }
+    }
+
+    fun deleteSetlist(setlistId: String) {
+        updateAppData { data ->
+            data.copy(setlists = data.setlists.filter { it.id != setlistId })
+        }
+    }
+
+    fun addSong(name: String) {
+        val newSong = Song(name = name)
+        updateActiveSetlist { setlist ->
+            setlist.copy(songs = setlist.songs + newSong)
+        }
+        updateAppData { it.copy(activeSongId = newSong.id) }
+    }
+
+    fun renameSong(songId: String, name: String) {
+        updateSong(songId) { it.copy(name = name) }
+    }
+
+    fun deleteSong(songId: String) {
+        updateActiveSetlist { setlist ->
+            setlist.copy(songs = setlist.songs.filter { it.id != songId })
+        }
+    }
+
+    fun reorderSongs(songs: List<Song>) {
+        updateActiveSetlist { it.copy(songs = songs) }
+    }
+
+    // ── Song settings ───────────────────────────────────
 
     fun setBpm(bpm: Double) {
-        _currentSong.value = _currentSong.value.copy(bpm = bpm)
+        updateActiveSong { it.copy(bpm = bpm) }
         engine.setBpm(bpm)
     }
 
     fun setTimeSignature(n: Int, d: Int) {
-        _currentSong.value = _currentSong.value.copy(
-            timeSigNumerator   = n,
-            timeSigDenominator = d,
-        )
+        updateActiveSong { it.copy(timeSigNumerator = n, timeSigDenominator = d) }
         engine.setTimeSignature(n, d)
     }
 
-    fun setClickType(type: ClickType) {
-        _currentSong.value = _currentSong.value.copy(clickType = type)
-        reloadSamples(type)
+    // ── Click clips ─────────────────────────────────────
+
+    fun addClickClip(clip: ClickClip) {
+        updateClickTrack { track ->
+            track.copy(clickClips = track.clickClips + clip)
+        }
+        applyBeatPatternToEngine(clip.pattern)
     }
 
-    // ── Mixer settings ────────────────────────────────────────────────────────
-
-    fun setClickEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(clickEnabled = enabled)
-        engine.setClickEnabled(enabled)
+    fun updateClickClip(clip: ClickClip) {
+        updateClickTrack { track ->
+            track.copy(clickClips = track.clickClips.map {
+                if (it.id == clip.id) clip else it
+            })
+        }
+        applyBeatPatternToEngine(clip.pattern)
     }
+
+    fun removeClickClip(clipId: String) {
+        updateClickTrack { track ->
+            track.copy(clickClips = track.clickClips.filter { it.id != clipId })
+        }
+    }
+
+    // ── Voice cue clips ─────────────────────────────────
+
+    fun addVoiceCueClip(clip: VoiceCueClip) {
+        updateVoiceCueTrack { track ->
+            track.copy(voiceCueClips = track.voiceCueClips + clip)
+        }
+    }
+
+    fun removeVoiceCueClip(clipId: String) {
+        updateVoiceCueTrack { track ->
+            track.copy(voiceCueClips = track.voiceCueClips.filter { it.id != clipId })
+        }
+    }
+
+    // ── Beat mixer ──────────────────────────────────────
 
     fun setAccentEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(accentEnabled = enabled)
         engine.setAccentEnabled(enabled)
+        updateBeatMixer { it.copy(accentEnabled = enabled) }
     }
 
     fun setAccentVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(accentVolume = vol)
         engine.setAccentVolume(vol)
-    }
-
-    fun setBeatEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(beatEnabled = enabled)
-        engine.setBeatEnabled(enabled)
-    }
-
-    fun setBeatVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(beatVolume = vol)
-        engine.setBeatVolume(vol)
-    }
-
-    fun setMasterVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(masterVolume = vol)
-        engine.setMasterVolume(vol)
+        updateBeatMixer { it.copy(accentVolume = vol) }
     }
 
     fun setQuarterEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(quarterEnabled = enabled)
-        )
         engine.setQuarterEnabled(enabled)
+        updateBeatMixer { it.copy(quarterEnabled = enabled) }
     }
 
     fun setQuarterVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(quarterVolume = vol)
-        )
         engine.setQuarterVolume(vol)
+        updateBeatMixer { it.copy(quarterVolume = vol) }
     }
 
     fun setEighthEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(eighthEnabled = enabled)
-        )
         engine.setEighthEnabled(enabled)
+        updateBeatMixer { it.copy(eighthEnabled = enabled) }
     }
 
     fun setEighthVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(eighthVolume = vol)
-        )
         engine.setEighthVolume(vol)
+        updateBeatMixer { it.copy(eighthVolume = vol) }
     }
 
     fun setSixteenthEnabled(enabled: Boolean) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(sixteenthEnabled = enabled)
-        )
         engine.setSixteenthEnabled(enabled)
+        updateBeatMixer { it.copy(sixteenthEnabled = enabled) }
     }
 
     fun setSixteenthVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(
-            beatMixer = _currentSong.value.beatMixer.copy(sixteenthVolume = vol)
-        )
         engine.setSixteenthVolume(vol)
+        updateBeatMixer { it.copy(sixteenthVolume = vol) }
     }
 
-    // ── Voice cues ────────────────────────────────────────────────────────────
+    fun setMasterVolume(vol: Float) {
+        engine.setMasterVolume(vol)
+        updateBeatMixer { it.copy(masterVolume = vol) }
+    }
 
-    fun addVoiceCueEvent(bar: Int, cue: VoiceCue) {
-        val event = VoiceCueEvent(voiceCue = cue, triggerBar = bar)
-        _currentSong.value = _currentSong.value.copy(
-            voiceCueEvents = _currentSong.value.voiceCueEvents + event
+    // ── Engine apply ────────────────────────────────────
+
+    private fun applySongToEngine(song: Song) {
+        engine.setBpm(song.bpm)
+        engine.setTimeSignature(song.timeSigNumerator, song.timeSigDenominator)
+        with(song.beatMixer) {
+            engine.setAccentEnabled(accentEnabled)
+            engine.setAccentVolume(accentVolume)
+            engine.setQuarterEnabled(quarterEnabled)
+            engine.setQuarterVolume(quarterVolume)
+            engine.setEighthEnabled(eighthEnabled)
+            engine.setEighthVolume(eighthVolume)
+            engine.setSixteenthEnabled(sixteenthEnabled)
+            engine.setSixteenthVolume(sixteenthVolume)
+            engine.setMasterVolume(masterVolume)
+        }
+        song.tracks
+            .flatMap { it.clickClips }
+            .lastOrNull()
+            ?.let { applyBeatPatternToEngine(it.pattern) }
+    }
+
+    fun applyBeatPatternToEngine(pattern: BeatPattern) {
+        val beats = pattern.cells.map { it.beatIndex }.toIntArray()
+        val rows = pattern.cells.map { it.row.ordinal }.toIntArray()
+        val subs = pattern.cells.map { it.subIndex }.toIntArray()
+        engine.setBeatPattern(
+            beats,
+            rows,
+            subs,
+            pattern.timeSigNumerator,
+            pattern.bpm
         )
-        pushCueTimeline()
     }
 
-    fun removeVoiceCueEvent(id: String) {
-        _currentSong.value = _currentSong.value.copy(
-            voiceCueEvents = _currentSong.value.voiceCueEvents.filter { it.id != id }
-        )
-        pushCueTimeline()
+    // ── Helpers ─────────────────────────────────────────
+
+    private fun updateAppData(transform: (AppData) -> AppData) {
+        _appData.update(transform)
+        viewModelScope.launch {
+            dataStore.saveAppData(_appData.value)
+        }
     }
 
-    fun setVoiceCueVolume(vol: Float) {
-        _currentSong.value = _currentSong.value.copy(voiceCueVolume = vol)
-        engine.setVoiceCueVolume(vol)
+    private fun updateSetlist(setlistId: String, transform: (Setlist) -> Setlist) {
+        updateAppData { data ->
+            data.copy(setlists = data.setlists.map {
+                if (it.id == setlistId) transform(it) else it
+            })
+        }
     }
 
-    fun setVoiceCueMuted(muted: Boolean) {
-        _currentSong.value = _currentSong.value.copy(voiceCueMuted = muted)
-        engine.setVoiceCueMuted(muted)
+    private fun updateActiveSetlist(transform: (Setlist) -> Setlist) {
+        val id = _appData.value.activeSetlistId
+            .ifEmpty { _appData.value.setlists.firstOrNull()?.id ?: "" }
+        updateSetlist(id, transform)
     }
 
-    private fun pushCueTimeline() {
-        val events = _currentSong.value.voiceCueEvents
-        val bars   = events.map { it.triggerBar }.toIntArray()
-        val cueIds = events.map { VoiceCue.entries.indexOf(it.voiceCue) }.toIntArray()
-        engine.setCueTimeline(bars, cueIds)
+    private fun updateSong(songId: String, transform: (Song) -> Song) {
+        updateActiveSetlist { setlist ->
+            setlist.copy(songs = setlist.songs.map {
+                if (it.id == songId) transform(it) else it
+            })
+        }
     }
 
-    // ── USB ───────────────────────────────────────────────────────────────────
-
-    fun selectUsbDevice(device: UsbAudioDeviceManager.UsbAudioDevice?) {
-        usbManager.selectDevice(device)
+    private fun updateActiveSong(transform: (Song) -> Song) {
+        val id = _appData.value.activeSongId
+        updateSong(id, transform)
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    private fun updateClickTrack(transform: (Track) -> Track) {
+        updateActiveSong { song ->
+            song.copy(tracks = song.tracks.map {
+                if (it.kind == TrackKind.CLICK) transform(it) else it
+            })
+        }
+    }
+
+    private fun updateVoiceCueTrack(transform: (Track) -> Track) {
+        updateActiveSong { song ->
+            song.copy(tracks = song.tracks.map {
+                if (it.kind == TrackKind.VOICE_CUE) transform(it) else it
+            })
+        }
+    }
+
+    private fun updateBeatMixer(transform: (BeatMixerState) -> BeatMixerState) {
+        updateActiveSong { song ->
+            song.copy(beatMixer = transform(song.beatMixer))
+        }
+    }
 
     override fun onCleared() {
         super.onCleared()
-        usbManager.stop()
+        engine.pause()
         engine.stop()
         engine.destroy()
-    }
-
-    // ── Private ───────────────────────────────────────────────────────────────
-
-    // Cancels any in-flight load so a rapid clickType/beatMode change never
-    // applies stale samples over a newer result.
-    private fun reloadSamples(clickType: ClickType) {
-        Log.d(TAG, "reloadSamples: clickType=$clickType")
-        sampleLoadJob?.cancel()
-        sampleLoadJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val (beatSamples, accentSamples) =
-                    SampleLoader.loadClickPair(getApplication(), clickType, BeatMode.QUARTER)
-                Log.d(TAG, "Loaded samples: beat=${beatSamples.size} accent=${accentSamples.size}")
-                withContext(Dispatchers.Main) {
-                    engine.setClickSample(beatSamples)
-                    engine.setAccentSample(accentSamples)
-                    Log.d(TAG, "Samples pushed to engine")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "reloadSamples failed", e)
-            }
-        }
-    }
-
-    private fun startPositionPolling() {
-        viewModelScope.launch {
-            while (true) {
-                _positionBeats.value = engine.getPositionBeats()
-                delay(16L)
-            }
-        }
+        usbManager.stop()
     }
 }

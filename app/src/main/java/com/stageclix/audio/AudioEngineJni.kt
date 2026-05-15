@@ -20,6 +20,15 @@ class AudioEngineJni {
     fun setBpm(bpm: Double)                           { nativeSetBpm(handle, bpm) }
     fun setTimeSignature(numerator: Int, denominator: Int) =
         nativeSetTimeSignature(handle, numerator, denominator)
+    fun setBeatPattern(
+        beatIndices: IntArray,
+        rows: IntArray,
+        subIndices: IntArray,
+        timeSigNumerator: Int,
+        bpm: Double
+    ) {
+        nativeSetBeatPattern(handle, beatIndices, rows, subIndices, timeSigNumerator, bpm)
+    }
     fun setClickEnabled(enabled: Boolean)             { nativeSetClickEnabled(handle, enabled) }
     fun setClickSample(pcm: FloatArray)               { nativeSetClickSample(handle, pcm) }
     fun setAccentSample(pcm: FloatArray)              { nativeSetAccentSample(handle, pcm) }
@@ -35,8 +44,25 @@ class AudioEngineJni {
     fun setSixteenthVolume(volume: Float)             { nativeSetSixteenthVolume(handle, volume) }
     fun setMasterVolume(volume: Float)                { nativeSetMasterVolume(handle, volume) }
     fun getPositionBeats(): Double                    = nativeGetPositionBeats(handle)
+    fun setCueData(pcm: FloatArray, frameCount: Int, channels: Int) {
+        nativeSetCueData(handle, pcm, frameCount, channels)
+    }
+    fun setCueVolume(volume: Float)                  { nativeSetCueVolume(handle, volume) }
+    fun setCueMuted(muted: Boolean)                  { nativeSetCueMuted(handle, muted)  }
+    fun playCue()                                    { nativePlayCue(handle)              }
+    fun pauseCue()                                   { nativePauseCue(handle)             }
+    fun rewindCue()                                  { nativeRewindCue(handle)            }
+
+    fun addBackingTrack(): Int                       = nativeAddBackingTrack(handle)
+    fun removeBackingTrack(index: Int)               { nativeRemoveBackingTrack(handle, index) }
+    fun setBackingTrackData(index: Int, pcm: FloatArray, channels: Int) {
+        nativeSetBackingTrackData(handle, index, pcm, channels)
+    }
+    fun setBackingTrackVolume(index: Int, volume: Float) { nativeSetBackingTrackVolume(handle, index, volume) }
+    fun setBackingTrackMuted(index: Int, muted: Boolean) { nativeSetBackingTrackMuted(handle, index, muted) }
+
     fun loadVoiceCue(cueId: Int, pcm: FloatArray)    { nativeLoadVoiceCue(handle, cueId, pcm) }
-    fun setCueTimeline(bars: IntArray, cueIds: IntArray) { nativeSetCueTimeline(handle, bars, cueIds) }
+    fun setSections(sectionBars: IntArray, voiceCueIds: IntArray) { nativeSetSections(handle, sectionBars, voiceCueIds) }
     fun setVoiceCueVolume(volume: Float)              { nativeSetVoiceCueVolume(handle, volume) }
     fun setVoiceCueMuted(muted: Boolean)              { nativeSetVoiceCueMuted(handle, muted) }
 
@@ -49,6 +75,14 @@ class AudioEngineJni {
     private external fun nativeRewind(handle: Long)
     private external fun nativeSetBpm(handle: Long, bpm: Double)
     private external fun nativeSetTimeSignature(handle: Long, numerator: Int, denominator: Int)
+    private external fun nativeSetBeatPattern(
+        handle: Long,
+        beatIndices: IntArray,
+        rows: IntArray,
+        subIndices: IntArray,
+        timeSigNumerator: Int,
+        bpm: Double
+    )
     private external fun nativeSetClickEnabled(handle: Long, enabled: Boolean)
     private external fun nativeSetClickSample(handle: Long, pcm: FloatArray)
     private external fun nativeSetAccentSample(handle: Long, pcm: FloatArray)
@@ -64,8 +98,19 @@ class AudioEngineJni {
     private external fun nativeSetSixteenthVolume(handle: Long, volume: Float)
     private external fun nativeSetMasterVolume(handle: Long, volume: Float)
     private external fun nativeGetPositionBeats(handle: Long): Double
+    private external fun nativeSetCueData(handle: Long, pcm: FloatArray, frameCount: Int, channelCount: Int)
+    private external fun nativeSetCueVolume(handle: Long, volume: Float)
+    private external fun nativeSetCueMuted(handle: Long, muted: Boolean)
+    private external fun nativePlayCue(handle: Long)
+    private external fun nativePauseCue(handle: Long)
+    private external fun nativeRewindCue(handle: Long)
+    private external fun nativeAddBackingTrack(handle: Long): Int
+    private external fun nativeRemoveBackingTrack(handle: Long, index: Int)
+    private external fun nativeSetBackingTrackData(handle: Long, index: Int, pcm: FloatArray, channels: Int)
+    private external fun nativeSetBackingTrackVolume(handle: Long, index: Int, volume: Float)
+    private external fun nativeSetBackingTrackMuted(handle: Long, index: Int, muted: Boolean)
     private external fun nativeLoadVoiceCue(handle: Long, cueId: Int, pcm: FloatArray)
-    private external fun nativeSetCueTimeline(handle: Long, bars: IntArray, cueIds: IntArray)
+    private external fun nativeSetSections(handle: Long, sectionBars: IntArray, voiceCueIds: IntArray)
     private external fun nativeSetVoiceCueVolume(handle: Long, volume: Float)
     private external fun nativeSetVoiceCueMuted(handle: Long, muted: Boolean)
 }
