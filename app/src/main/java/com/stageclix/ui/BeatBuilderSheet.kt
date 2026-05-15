@@ -42,6 +42,7 @@ import com.stageclix.data.Song
 @Composable
 fun BeatBuilderSheet(
     song: Song,
+    onAuditNote: (row: Int) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: (ClickClip) -> Unit,
 ) {
@@ -332,6 +333,9 @@ fun BeatBuilderSheet(
                                             )
                                             .clickable {
                                                 toggleCell(beat, rowDef.row, sub)
+                                                if (isCellOn(beat, rowDef.row, sub)) {
+                                                    onAuditNote(rowDef.row.ordinal)
+                                                }
                                             },
                                         contentAlignment = Alignment.Center,
                                     ) {

@@ -145,6 +145,11 @@ void AudioEngine::setBeatPattern(
     if (events && count > 0) {
         pattern.assign(events, events + count);
     }
+    LOGI("setBeatPattern: %d events, timeSig=%d, bpm=%.1f", count, timeSigNumerator, bpm);
+    for (int i = 0; i < count; i++) {
+        LOGI("  event[%d]: beat=%d row=%d sub=%d",
+             i, events[i].beatIndex, events[i].row, events[i].subIndex);
+    }
     {
         std::lock_guard<std::mutex> lock(mBeatPatternMutex);
         mBeatPattern = std::move(pattern);
@@ -205,6 +210,20 @@ void AudioEngine::swapPendingBuffers() {
         if (mClickHead.buf == mClickBuf) mClickHead.active = false;
         delete mClickBuf;
         mClickBuf = pending;
+    }
+}
+
+void AudioEngine::triggerSampleAt(
+    SampleBuffer* buf,
+    int offsetInBuffer,
+    float gain,
+    float* mixBuffer,
+    int numFrames
+) {
+    if (!buf || buf->length == 0) return;
+    int readPos = 0;
+    for (int i = offsetInBuffer; i < numFrames && readPos < buf->length; i++, readPos++) {
+        mixBuffer[i] += buf->data[readPos] * gain;
     }
 }
 
@@ -280,6 +299,22 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     std::fill_n(mCueMixBuf.data(),   numFrames, 0.0f);
     std::fill_n(mVoiceMixBuf.data(), numFrames, 0.0f);
 
+    if (mAuditPending.exchange(false, std::memory_order_acq_rel)) {
+        const int   auditRow  = mPendingAuditRow.load(std::memory_order_relaxed);
+        const float masterV   = mMasterVolume.load(std::memory_order_relaxed);
+        if (auditRow == 0 && mAccentBuf) {
+            triggerSampleAt(mAccentBuf, 0,
+                mAccentVolume.load(std::memory_order_relaxed) * masterV,
+                mClickMixBuf.data(), numFrames);
+        } else if (mClickBuf) {
+            const float vol =
+                (auditRow == 1) ? mQuarterVolume.load(std::memory_order_relaxed)
+              : (auditRow == 2) ? mEighthVolume.load(std::memory_order_relaxed)
+              :                   mSixteenthVolume.load(std::memory_order_relaxed);
+            triggerSampleAt(mClickBuf, 0, vol * masterV, mClickMixBuf.data(), numFrames);
+        }
+    }
+
     std::vector<BeatEvent> beatPattern;
     {
         std::lock_guard<std::mutex> lock(mBeatPatternMutex);
@@ -287,74 +322,49 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     }
 
     // ── Channel 0: click track (accent + beat ticks) ──────────────────────────
-    for (int32_t i = 0; i < numFrames; ++i) {
-        float sample = 0.0f;
+    if (playing && clickEnabled && !beatPattern.empty()) {
+        const int timeSigNum   = std::max(numerator, 1);
+        const int64_t framesPerBar = static_cast<int64_t>(framesPerBeat * timeSigNum);
+        const int64_t posInBar = (framesPerBar > 0) ? mCurrentFrame % framesPerBar : 0;
 
-        if (playing && clickEnabled) {
-            int64_t frame = mCurrentFrame + i;
-            int64_t sixteenthNum =
-                static_cast<int64_t>(static_cast<double>(frame) / (framesPerBeat * 0.25));
+        for (auto& event : beatPattern) {
+            double eventBeatPos = static_cast<double>(event.beatIndex);
+            if (event.row == 2)      // 8TH
+                eventBeatPos += event.subIndex * 0.5;
+            else if (event.row == 3) // 16TH
+                eventBeatPos += event.subIndex * 0.25;
 
-            if (sixteenthNum != mLastSixteenthNum) {
-                mLastSixteenthNum = sixteenthNum;
-                double posBeats = static_cast<double>(frame) / framesPerBeat;
-                int timeSigNum = std::max(numerator, 1);
-                double totalSixteenths = posBeats * 4.0;
-                int barSixteenths = timeSigNum * 4;
-                int posInBar = static_cast<int>(totalSixteenths) % barSixteenths;
+            const int64_t eventFrame = static_cast<int64_t>(eventBeatPos * framesPerBeat);
 
-                for (auto& event : beatPattern) {
-                    int eventPos = event.beatIndex * 4;
-                    if (event.row == 1)
-                        eventPos = event.beatIndex * 4;
-                    else if (event.row == 2)
-                        eventPos = event.beatIndex * 4 + event.subIndex * 2;
-                    else if (event.row == 3)
-                        eventPos = event.beatIndex * 4 + event.subIndex;
+            if (posInBar <= eventFrame && posInBar + numFrames > eventFrame) {
+                const int offsetInBuffer = static_cast<int>(eventFrame - posInBar);
 
-                    if (posInBar == eventPos) {
-                        float gain = 1.0f;
-                        bool tierOn = true;
-                        if (event.row == 0) {
-                            tierOn = accentEnabled;
-                            gain = accentVol * masterVol;
-                        } else if (event.row == 1) {
-                            tierOn = quarterEnabled;
-                            gain = quarterVol * masterVol;
-                        } else if (event.row == 2) {
-                            tierOn = eighthEnabled;
-                            gain = eighthVol * masterVol;
-                        } else if (event.row == 3) {
-                            tierOn = sixteenthEnabled;
-                            gain = sixteenthVol * masterVol;
-                        }
-                        if (tierOn && mClickBuf)
-                            mClickHead = {mClickBuf, 0, gain, true, event.row};
-                        if (event.row == 0 && accentEnabled && mAccentBuf)
-                            mAccentHead = {mAccentBuf, 0, accentVol * masterVol, true, 0};
+                if (event.row == 0) { // ACC
+                    if (accentEnabled)
+                        triggerSampleAt(mAccentBuf, offsetInBuffer,
+                            accentVol * masterVol, mClickMixBuf.data(), numFrames);
+                } else {
+                    float gain = 1.0f;
+                    bool  tierOn = false;
+                    if (event.row == 1) {
+                        tierOn = quarterEnabled;
+                        gain   = quarterVol * masterVol;
+                    } else if (event.row == 2) {
+                        tierOn = eighthEnabled;
+                        gain   = eighthVol * masterVol;
+                    } else if (event.row == 3) {
+                        tierOn = sixteenthEnabled;
+                        gain   = sixteenthVol * masterVol;
                     }
+                    if (tierOn)
+                        triggerSampleAt(mClickBuf, offsetInBuffer,
+                            gain, mClickMixBuf.data(), numFrames);
                 }
             }
         }
 
-        if (mAccentHead.active) {
-            if (accentEnabled && mAccentHead.pos < mAccentHead.buf->length)
-                sample += mAccentHead.buf->data[mAccentHead.pos++] * mAccentHead.volume;
-            else
-                mAccentHead.active = false;
-        }
-
-        if (mClickHead.active) {
-            const bool tierOn = (mClickHead.tier == 1) ? quarterEnabled
-                              : (mClickHead.tier == 2) ? eighthEnabled
-                              :                          sixteenthEnabled;
-            if (tierOn && mClickHead.pos < mClickHead.buf->length)
-                sample += mClickHead.buf->data[mClickHead.pos++] * mClickHead.volume;
-            else
-                mClickHead.active = false;
-        }
-
-        mClickMixBuf[i] = softClip(sample);
+        for (int32_t i = 0; i < numFrames; ++i)
+            mClickMixBuf[i] = softClip(mClickMixBuf[i]);
     }
 
     // ── Channel 1: cue / backing audio (BackingMixer) ────────────────────────
@@ -486,6 +496,11 @@ void AudioEngine::setSections(const int* sectionBars, const int* voiceCueIds, in
     std::lock_guard<std::mutex> lock(mSectionsMutex);
     mSectionsPending = std::move(sections);
     mSectionsDirty.store(true, std::memory_order_relaxed);
+}
+
+void AudioEngine::auditNote(int row) {
+    mPendingAuditRow.store(row, std::memory_order_relaxed);
+    mAuditPending.store(true, std::memory_order_release);
 }
 
 void AudioEngine::setVoiceCueVolume(float volume) {

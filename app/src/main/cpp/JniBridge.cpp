@@ -149,6 +149,10 @@ JFUNC(jdouble, nativeGetPositionBeats)(JNIEnv*, jobject, jlong handle) {
     return static_cast<jdouble>(engine(handle)->getPositionBeats());
 }
 
+JFUNC(void, nativeAuditNote)(JNIEnv*, jobject, jlong handle, jint row, jint /*clickTypeIndex*/) {
+    engine(handle)->auditNote(static_cast<int>(row));
+}
+
 JFUNC(void, nativeLoadVoiceCue)(JNIEnv* env, jobject, jlong handle, jint cueId, jfloatArray pcm) {
     jsize   len  = env->GetArrayLength(pcm);
     jfloat* data = env->GetFloatArrayElements(pcm, nullptr);

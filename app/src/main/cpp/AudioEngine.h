@@ -89,6 +89,8 @@ public:
     void   setVoiceCueVolume(float volume);
     void   setVoiceCueMuted(bool muted);
 
+    void   auditNote(int row);
+
     double getPositionBeats();
 
     oboe::DataCallbackResult onAudioReady(
@@ -100,6 +102,8 @@ public:
 
 private:
     void swapPendingBuffers();
+    void triggerSampleAt(SampleBuffer* buf, int offsetInBuffer, float gain,
+                         float* mixBuffer, int numFrames);
 
     std::shared_ptr<oboe::AudioStream> mStream;
 
@@ -153,6 +157,9 @@ private:
     int64_t              mLastEighthNum{-1};
     int64_t              mLastSixteenthNum{-1};
     std::atomic<int64_t> mAtomicFramePos{0};
+
+    std::atomic<bool> mAuditPending{false};
+    std::atomic<int>  mPendingAuditRow{0};
 
     struct PlayHead {
         const SampleBuffer* buf    = nullptr;

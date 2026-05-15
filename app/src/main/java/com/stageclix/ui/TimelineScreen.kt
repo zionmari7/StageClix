@@ -15,8 +15,8 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -65,6 +65,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -210,9 +211,10 @@ fun TimelineScreen(
 
     if (showBeatBuilder) {
         BeatBuilderSheet(
-            song      = currentSong,
-            onDismiss = { showBeatBuilder = false },
-            onConfirm = { clip ->
+            song        = currentSong,
+            onAuditNote = { row -> viewModel.auditNote(row) },
+            onDismiss   = { showBeatBuilder = false },
+            onConfirm   = { clip ->
                 viewModel.addClickClip(clip)
                 showBeatBuilder = false
             },
@@ -554,18 +556,22 @@ fun TrackLane(
         }
 
         if (track.kind == TrackKind.CLICK) {
-            track.clickClips.forEach { clip ->
-                ClickClipBlock(
-                    clip        = clip,
-                    beatsPerBar = beatsPerBar,
-                    onResized   = onClipResized,
-                )
+            Box(modifier = Modifier.fillMaxSize()) {
+                track.clickClips.forEach { clip ->
+                    ClickClipBlock(
+                        clip        = clip,
+                        beatsPerBar = beatsPerBar,
+                        onResized   = onClipResized,
+                    )
+                }
             }
         }
 
         if (track.kind == TrackKind.VOICE_CUE) {
-            track.voiceCueClips.forEach { clip ->
-                VoiceCueClipBlock(clip = clip)
+            Box(modifier = Modifier.fillMaxSize()) {
+                track.voiceCueClips.forEach { clip ->
+                    VoiceCueClipBlock(clip = clip)
+                }
             }
         }
     }
@@ -578,14 +584,14 @@ private fun ClickClipBlock(
     onResized: (ClickClip) -> Unit,
 ) {
     val pxPerBar = PX_PER_BAR
-    var durationBars by remember(clip.id) { mutableStateOf(clip.durationBars) }
-    var isDraggingEdge by remember { mutableStateOf(false) }
+    var durationBars by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
+    var dragAccumulator by remember { mutableStateOf(0f) }
 
     Box(
         modifier = Modifier
             .padding(top = 4.dp, bottom = 4.dp)
-            .absoluteOffset(x = (clip.startBar * pxPerBar).dp, y = 0.dp)
-            .width((durationBars * pxPerBar).dp)
+            .offset { IntOffset(x = (clip.startBar * PX_PER_BAR).toInt(), y = 0) }
+            .width((durationBars * PX_PER_BAR).dp)
             .fillMaxHeight()
             .background(Color(0xFF1A3A1A), RoundedCornerShape(3.dp))
             .border(1.dp, Color(0xFF2AB02A), RoundedCornerShape(3.dp)),
@@ -634,21 +640,27 @@ private fun ClickClipBlock(
 
         Box(
             modifier = Modifier
-                .width(8.dp)
+                .width(12.dp)
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
-                .background(Color(0x662AB02A), RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp))
+                .background(Color(0x882AB02A), RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp))
                 .pointerInput(clip.id) {
                     detectDragGestures(
-                        onDragStart  = { isDraggingEdge = true },
-                        onDragEnd    = {
-                            isDraggingEdge = false
-                            onResized(clip.copy(durationBars = durationBars))
+                        onDragEnd = {
+                            dragAccumulator = 0f
+                            onResized(clip.copy(
+                                durationBars = durationBars.toInt().coerceAtLeast(1),
+                            ))
                         },
-                        onDragCancel = { isDraggingEdge = false },
-                        onDrag       = { _, dragAmount ->
-                            val barsDelta = (dragAmount.x / pxPerBar).toInt()
-                            durationBars  = (durationBars + barsDelta).coerceAtLeast(1)
+                        onDragCancel = { dragAccumulator = 0f },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            dragAccumulator += dragAmount.x
+                            val barsMoved = (dragAccumulator / PX_PER_BAR).toInt()
+                            if (barsMoved != 0) {
+                                durationBars = (durationBars + barsMoved).coerceAtLeast(1f)
+                                dragAccumulator -= barsMoved * PX_PER_BAR
+                            }
                         },
                     )
                 },
@@ -662,7 +674,7 @@ private fun VoiceCueClipBlock(clip: VoiceCueClip) {
     Box(
         modifier = Modifier
             .padding(top = 5.dp, bottom = 5.dp)
-            .absoluteOffset(x = (clip.startBar * pxPerBar).dp, y = 0.dp)
+            .offset { IntOffset(x = (clip.startBar * pxPerBar).toInt(), y = 0) }
             .width((pxPerBar * 1.5f).dp)
             .fillMaxHeight()
             .background(Color(0xFF1A1A3A), RoundedCornerShape(3.dp))

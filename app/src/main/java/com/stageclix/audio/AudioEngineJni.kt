@@ -61,6 +61,8 @@ class AudioEngineJni {
     fun setBackingTrackVolume(index: Int, volume: Float) { nativeSetBackingTrackVolume(handle, index, volume) }
     fun setBackingTrackMuted(index: Int, muted: Boolean) { nativeSetBackingTrackMuted(handle, index, muted) }
 
+    fun auditNote(row: Int, clickTypeIndex: Int = 0)  { nativeAuditNote(handle, row, clickTypeIndex) }
+
     fun loadVoiceCue(cueId: Int, pcm: FloatArray)    { nativeLoadVoiceCue(handle, cueId, pcm) }
     fun setSections(sectionBars: IntArray, voiceCueIds: IntArray) { nativeSetSections(handle, sectionBars, voiceCueIds) }
     fun setVoiceCueVolume(volume: Float)              { nativeSetVoiceCueVolume(handle, volume) }
@@ -109,6 +111,7 @@ class AudioEngineJni {
     private external fun nativeSetBackingTrackData(handle: Long, index: Int, pcm: FloatArray, channels: Int)
     private external fun nativeSetBackingTrackVolume(handle: Long, index: Int, volume: Float)
     private external fun nativeSetBackingTrackMuted(handle: Long, index: Int, muted: Boolean)
+    private external fun nativeAuditNote(handle: Long, row: Int, clickTypeIndex: Int)
     private external fun nativeLoadVoiceCue(handle: Long, cueId: Int, pcm: FloatArray)
     private external fun nativeSetSections(handle: Long, sectionBars: IntArray, voiceCueIds: IntArray)
     private external fun nativeSetVoiceCueVolume(handle: Long, volume: Float)

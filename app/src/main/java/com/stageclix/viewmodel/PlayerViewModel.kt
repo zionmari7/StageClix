@@ -2,6 +2,7 @@ package com.stageclix.viewmodel
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stageclix.audio.*
@@ -142,6 +143,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun selectSong(songId: String) {
         rewind()
         updateAppData { it.copy(activeSongId = songId) }
+        val song = _appData.value.setlists
+            .flatMap { it.songs }
+            .find { it.id == songId }
+        song?.tracks
+            ?.find { it.kind == TrackKind.CLICK }
+            ?.clickClips
+            ?.firstOrNull()
+            ?.let { applyBeatPatternToEngine(it.pattern) }
     }
 
     fun addSetlist(name: String) {
@@ -202,13 +211,24 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         engine.setTimeSignature(n, d)
     }
 
+    // ── Beat audition ───────────────────────────────────
+
+    fun auditNote(row: Int) {
+        engine.auditNote(row, 0)
+    }
+
     // ── Click clips ─────────────────────────────────────
 
     fun addClickClip(clip: ClickClip) {
+        Log.d("StageClix", "Adding click clip to song: ${_appData.value.activeSongId}")
+        Log.d("StageClix", "Clip: startBar=${clip.startBar} duration=${clip.durationBars} cells=${clip.pattern.cells.size}")
         updateClickTrack { track ->
             track.copy(clickClips = track.clickClips + clip)
         }
-        applyBeatPatternToEngine(clip.pattern)
+        viewModelScope.launch {
+            applyBeatPatternToEngine(clip.pattern)
+            Log.d("StageClix", "Applied beat pattern: ${clip.pattern.cells.size} cells")
+        }
     }
 
     fun updateClickClip(clip: ClickClip) {
@@ -304,8 +324,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             engine.setMasterVolume(masterVolume)
         }
         song.tracks
-            .flatMap { it.clickClips }
-            .lastOrNull()
+            .find { it.kind == TrackKind.CLICK }
+            ?.clickClips
+            ?.firstOrNull()
             ?.let { applyBeatPatternToEngine(it.pattern) }
     }
 
@@ -360,9 +381,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateClickTrack(transform: (Track) -> Track) {
         updateActiveSong { song ->
-            song.copy(tracks = song.tracks.map {
-                if (it.kind == TrackKind.CLICK) transform(it) else it
-            })
+            if (song.tracks.any { it.kind == TrackKind.CLICK }) {
+                song.copy(tracks = song.tracks.map {
+                    if (it.kind == TrackKind.CLICK) transform(it) else it
+                })
+            } else {
+                Log.d("StageClix", "No CLICK track found — creating one")
+                song.copy(tracks = song.tracks + transform(Track(kind = TrackKind.CLICK, name = "Click")))
+            }
         }
     }
 
