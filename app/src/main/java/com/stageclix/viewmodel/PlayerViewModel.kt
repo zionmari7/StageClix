@@ -262,6 +262,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         updateClickTrack { track ->
             track.copy(clickClips = track.clickClips.filter { it.id != clipId })
         }
+        pushClickClipRanges()
+        Log.d("StageClix", "Removed click clip: $clipId")
     }
 
     // ── Voice cue clips ─────────────────────────────────

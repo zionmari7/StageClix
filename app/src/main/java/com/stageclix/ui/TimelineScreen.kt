@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.onSizeChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -205,6 +207,7 @@ fun TimelineScreen(
                             positionBeats = positionBeats,
                             beatsPerBar   = currentSong.timeSigNumerator,
                             onClipResized = { viewModel.updateClickClip(it) },
+                            onDeleteClip  = { viewModel.removeClickClip(it) },
                             modifier      = Modifier.width(totalWidth).height(TRACK_HEIGHT_DP.dp),
                         )
                     }
@@ -526,6 +529,7 @@ fun TrackLane(
     positionBeats: Double,
     beatsPerBar: Int,
     onClipResized: (ClickClip) -> Unit,
+    onDeleteClip: (String) -> Unit,
     modifier: Modifier,
 ) {
     val bgColor = when (track.kind) {
@@ -590,6 +594,7 @@ fun TrackLane(
                         clip        = clip,
                         beatsPerBar = beatsPerBar,
                         onResized   = onClipResized,
+                        onDelete    = onDeleteClip,
                     )
                 }
             }
@@ -610,13 +615,25 @@ private fun ClickClipBlock(
     clip: ClickClip,
     beatsPerBar: Int,
     onResized: (ClickClip) -> Unit,
+    onDelete: (String) -> Unit,
 ) {
     // barWidthPx: actual pixels per bar (dp → px). detectDragGestures reports in layout px.
-    val barWidthPx    = with(LocalDensity.current) { BAR_WIDTH.toPx() }
-    var durationBars by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
+    val barWidthPx      = with(LocalDensity.current) { BAR_WIDTH.toPx() }
+    var durationBars   by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
+    var pendingDelete  by remember { mutableStateOf(false) }
     // Plain float array — not observable state, so it doesn't cause extra recompositions
     // on every drag event (only durationBars changes need to recompose).
     val dragAccumulator = remember { floatArrayOf(0f) }
+
+    // When long-press fires, flash red border for 500ms then delete.
+    if (pendingDelete) {
+        LaunchedEffect(Unit) {
+            delay(500)
+            onDelete(clip.id)
+        }
+    }
+
+    val borderColor = if (pendingDelete) Color(0xFFE83020) else Color(0xFF2AB02A)
 
     Box(
         modifier = Modifier
@@ -626,7 +643,10 @@ private fun ClickClipBlock(
             .width(BAR_WIDTH * durationBars)
             .fillMaxHeight()
             .background(Color(0xFF1A3A1A), RoundedCornerShape(3.dp))
-            .border(1.dp, Color(0xFF2AB02A), RoundedCornerShape(3.dp)),
+            .border(1.dp, borderColor, RoundedCornerShape(3.dp))
+            .pointerInput(clip.id) {
+                detectTapGestures(onLongPress = { pendingDelete = true })
+            },
     ) {
         Text(
             text       = "${clip.pattern.clickType.displayName} · ${clip.pattern.timeSigNumerator}/4",
@@ -637,36 +657,76 @@ private fun ClickClipBlock(
             fontFamily = FontFamily.Monospace,
         )
 
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .align(Alignment.TopEnd)
+                .padding(top = 2.dp, end = 8.dp)
+                .background(Color(0x99111111), RoundedCornerShape(2.dp))
+                .clickable { onDelete(clip.id) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("✕", fontSize = 9.sp, color = Color(0xFF888888))
+        }
+
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(14.dp)
+                .height(16.dp)
                 .align(Alignment.BottomStart)
-                .padding(start = 3.dp, end = 3.dp, bottom = 2.dp),
+                .padding(bottom = 2.dp),
         ) {
-            val cells      = clip.pattern.cells
-            val totalCells = clip.pattern.timeSigNumerator * 4
-            val cellW      = size.width / totalCells.toFloat()
-            cells.forEach { cell ->
-                val offset = cell.beatIndex * 4 + cell.subIndex
-                val x      = offset * cellW
-                val h      = when (cell.row) {
-                    NoteRow.ACC       -> size.height
-                    NoteRow.QTR       -> size.height * 0.7f
-                    NoteRow.EIGHTH    -> size.height * 0.5f
-                    NoteRow.SIXTEENTH -> size.height * 0.35f
+            val cells = clip.pattern.cells
+            if (cells.isEmpty()) return@Canvas
+
+            val timeSigNum    = clip.pattern.timeSigNumerator
+            // barWidthPx is captured from the outer composable scope (correct px for density)
+            val patternWidthPx = barWidthPx
+            val totalSlots     = timeSigNum * 4
+            val slotWidth      = patternWidthPx / totalSlots
+            val repetitions    = (size.width / patternWidthPx).toInt() + 1
+
+            for (rep in 0 until repetitions) {
+                val repOffsetX = rep * patternWidthPx
+
+                // Subtle repeat divider
+                if (rep > 0) {
+                    drawLine(
+                        color       = Color(0xFF2AB02A).copy(alpha = 0.3f),
+                        start       = Offset(repOffsetX, 0f),
+                        end         = Offset(repOffsetX, size.height),
+                        strokeWidth = 0.5f,
+                    )
                 }
-                val color = when (cell.row) {
-                    NoteRow.ACC       -> Color(0xFF2AB02A)
-                    NoteRow.QTR       -> Color(0xFF3A7BD5)
-                    NoteRow.EIGHTH    -> Color(0xFF7D3C98)
-                    NoteRow.SIXTEENTH -> Color(0xFFC06020)
+
+                cells.forEach { cell ->
+                    val slotIndex = when (cell.row) {
+                        NoteRow.ACC       -> cell.beatIndex * 4
+                        NoteRow.QTR       -> cell.beatIndex * 4
+                        NoteRow.EIGHTH    -> cell.beatIndex * 4 + cell.subIndex * 2
+                        NoteRow.SIXTEENTH -> cell.beatIndex * 4 + cell.subIndex
+                    }
+                    val x = repOffsetX + slotIndex * slotWidth
+                    if (x > size.width) return@forEach
+
+                    val barHeight = when (cell.row) {
+                        NoteRow.ACC       -> size.height
+                        NoteRow.QTR       -> size.height * 0.72f
+                        NoteRow.EIGHTH    -> size.height * 0.50f
+                        NoteRow.SIXTEENTH -> size.height * 0.32f
+                    }
+                    val color = when (cell.row) {
+                        NoteRow.ACC       -> Color(0xFF2AB02A)
+                        NoteRow.QTR       -> Color(0xFF3A7BD5)
+                        NoteRow.EIGHTH    -> Color(0xFF7D3C98)
+                        NoteRow.SIXTEENTH -> Color(0xFFC06020)
+                    }
+                    drawRect(
+                        color   = color,
+                        topLeft = Offset(x, size.height - barHeight),
+                        size    = Size((slotWidth - 1f).coerceAtLeast(1f), barHeight),
+                    )
                 }
-                drawRect(
-                    color   = color,
-                    topLeft = Offset(x, size.height - h),
-                    size    = Size(cellW - 1f, h),
-                )
             }
         }
 
