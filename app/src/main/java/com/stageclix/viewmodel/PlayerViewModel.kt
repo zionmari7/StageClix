@@ -78,6 +78,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             VoiceCueLoader.loadAll(app, engine)
         }
 
+        // Load default click samples so beat-builder audition works immediately
+        loadClickSamples(ClickType.WOODBLOCK)
+
         // Poll position
         viewModelScope.launch {
             while (isActive) {
@@ -220,18 +223,26 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     // ── Click clips ─────────────────────────────────────
 
     fun addClickClip(clip: ClickClip) {
-        Log.d("StageClix", "Adding click clip to song: ${_appData.value.activeSongId}")
-        Log.d("StageClix", "Clip: startBar=${clip.startBar} duration=${clip.durationBars} cells=${clip.pattern.cells.size}")
+        Log.d("StageClix", "addClickClip: startBar=${clip.startBar} duration=${clip.durationBars} cells=${clip.pattern.cells.size}")
         updateClickTrack { track ->
             track.copy(clickClips = track.clickClips + clip)
         }
-        val clipCount = activeSong.value
-            ?.tracks?.find { it.kind == TrackKind.CLICK }
-            ?.clickClips?.size
-        Log.d("StageClix", "Click track now has $clipCount clips")
-        viewModelScope.launch {
-            applyBeatPatternToEngine(clip.pattern)
-            Log.d("StageClix", "Applied beat pattern: ${clip.pattern.cells.size} cells")
+        applyBeatPatternToEngine(clip.pattern)
+        loadClickSamples(clip.pattern.clickType)
+    }
+
+    fun loadClickSamples(clickType: ClickType) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val (beat, accent) = SampleLoader.loadClickPair(
+                    getApplication(), clickType, BeatMode.QUARTER,
+                )
+                engine.setClickSample(beat)
+                engine.setAccentSample(accent)
+                Log.d("StageClix", "Click samples loaded for $clickType")
+            }.onFailure { e ->
+                Log.e("StageClix", "Failed to load click samples for $clickType", e)
+            }
         }
     }
 
@@ -331,7 +342,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             .find { it.kind == TrackKind.CLICK }
             ?.clickClips
             ?.firstOrNull()
-            ?.let { applyBeatPatternToEngine(it.pattern) }
+            ?.let { clip ->
+                applyBeatPatternToEngine(clip.pattern)
+                loadClickSamples(clip.pattern.clickType)
+            }
     }
 
     fun applyBeatPatternToEngine(pattern: BeatPattern) {
@@ -379,7 +393,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateActiveSong(transform: (Song) -> Song) {
-        val id = _appData.value.activeSongId
+        val data = _appData.value
+        val setlistId = data.activeSetlistId
+            .ifEmpty { data.setlists.firstOrNull()?.id ?: "" }
+        val songs = data.setlists.find { it.id == setlistId }?.songs ?: emptyList()
+        val id = data.activeSongId.ifEmpty { songs.firstOrNull()?.id ?: "" }
         updateSong(id, transform)
     }
 

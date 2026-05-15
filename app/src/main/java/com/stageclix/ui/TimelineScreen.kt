@@ -65,6 +65,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -211,10 +212,11 @@ fun TimelineScreen(
 
     if (showBeatBuilder) {
         BeatBuilderSheet(
-            song        = currentSong,
-            onAuditNote = { row -> viewModel.auditNote(row) },
-            onDismiss   = { showBeatBuilder = false },
-            onConfirm   = { clip ->
+            song               = currentSong,
+            onAuditNote        = { row -> viewModel.auditNote(row) },
+            onClickTypeSelected = { clickType -> viewModel.loadClickSamples(clickType) },
+            onDismiss          = { showBeatBuilder = false },
+            onConfirm          = { clip ->
                 viewModel.addClickClip(clip)
                 showBeatBuilder = false
             },
@@ -583,14 +585,20 @@ private fun ClickClipBlock(
     beatsPerBar: Int,
     onResized: (ClickClip) -> Unit,
 ) {
-    val pxPerBar = PX_PER_BAR
+    // Convert the dp-per-bar constant to layout pixels so the drag threshold is
+    // density-aware (dragAmount.x from detectDragGestures is in layout px, not dp).
+    val pxPerBar = with(LocalDensity.current) { PX_PER_BAR.dp.toPx() }
     var durationBars by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
-    var dragAccumulator by remember { mutableStateOf(0f) }
+    // Plain float array — not observable state, so it doesn't cause extra recompositions
+    // on every drag event (only durationBars changes need to recompose).
+    val dragAccumulator = remember { floatArrayOf(0f) }
 
     Box(
         modifier = Modifier
             .padding(top = 4.dp, bottom = 4.dp)
-            .offset { IntOffset(x = (clip.startBar * PX_PER_BAR).toInt(), y = 0) }
+            // Layout offset (not graphical): moves the composable in the layout pass so
+            // the drag handle's hit-test area is at the correct on-screen position.
+            .offset(x = (clip.startBar * PX_PER_BAR).dp)
             .width((durationBars * PX_PER_BAR).dp)
             .fillMaxHeight()
             .background(Color(0xFF1A3A1A), RoundedCornerShape(3.dp))
@@ -647,19 +655,19 @@ private fun ClickClipBlock(
                 .pointerInput(clip.id) {
                     detectDragGestures(
                         onDragEnd = {
-                            dragAccumulator = 0f
+                            dragAccumulator[0] = 0f
                             onResized(clip.copy(
                                 durationBars = durationBars.toInt().coerceAtLeast(1),
                             ))
                         },
-                        onDragCancel = { dragAccumulator = 0f },
+                        onDragCancel = { dragAccumulator[0] = 0f },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            dragAccumulator += dragAmount.x
-                            val barsMoved = (dragAccumulator / PX_PER_BAR).toInt()
+                            dragAccumulator[0] += dragAmount.x
+                            val barsMoved = (dragAccumulator[0] / pxPerBar).toInt()
                             if (barsMoved != 0) {
                                 durationBars = (durationBars + barsMoved).coerceAtLeast(1f)
-                                dragAccumulator -= barsMoved * PX_PER_BAR
+                                dragAccumulator[0] -= barsMoved * pxPerBar
                             }
                         },
                     )

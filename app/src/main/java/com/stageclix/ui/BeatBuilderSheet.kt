@@ -43,6 +43,7 @@ import com.stageclix.data.Song
 fun BeatBuilderSheet(
     song: Song,
     onAuditNote: (row: Int) -> Unit,
+    onClickTypeSelected: (ClickType) -> Unit = {},
     onDismiss: () -> Unit,
     onConfirm: (ClickClip) -> Unit,
 ) {
@@ -142,6 +143,7 @@ fun BeatBuilderSheet(
                                 )
                                 .clickable {
                                     selectedClickType = ct
+                                    onClickTypeSelected(ct)
                                 }
                                 .padding(horizontal = 6.dp, vertical = 3.dp),
                             contentAlignment = Alignment.Center,
