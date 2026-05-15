@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
 import com.stageclix.data.BeatMode
 import com.stageclix.data.ClickType
 import java.nio.ByteBuffer
@@ -96,6 +97,75 @@ object SampleLoader {
     }
 
     /**
+     * Decodes an audio file from a content URI, returning interleaved float PCM and the channel
+     * count.  Stereo files stay stereo so FilePlayer can route L/R independently.
+     */
+    fun loadCueFromUri(context: Context, uri: Uri): Pair<FloatArray, Int> {
+        val extractor = MediaExtractor().apply { setDataSource(context, uri, null) }
+
+        val trackIndex = (0 until extractor.trackCount).indexOfFirst { i ->
+            extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                ?.startsWith("audio/") == true
+        }
+        require(trackIndex >= 0) { "No audio track found in $uri" }
+        extractor.selectTrack(trackIndex)
+
+        val inputFormat = extractor.getTrackFormat(trackIndex)
+        val mime = inputFormat.getString(MediaFormat.KEY_MIME)!!
+        var channelCount = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+
+        val codec = MediaCodec.createDecoderByType(mime)
+        codec.configure(inputFormat, null, null, 0)
+        codec.start()
+
+        val rawSamples = ArrayList<Float>(1_048_576)
+        val info = MediaCodec.BufferInfo()
+        var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
+        var inputDone = false
+        var outputDone = false
+
+        while (!outputDone) {
+            if (!inputDone) {
+                val idx = codec.dequeueInputBuffer(10_000L)
+                if (idx >= 0) {
+                    val inBuf = codec.getInputBuffer(idx)!!
+                    val size  = extractor.readSampleData(inBuf, 0)
+                    if (size < 0) {
+                        codec.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        inputDone = true
+                    } else {
+                        codec.queueInputBuffer(idx, 0, size, extractor.sampleTime, 0)
+                        extractor.advance()
+                    }
+                }
+            }
+            when (val outIdx = codec.dequeueOutputBuffer(info, 10_000L)) {
+                MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
+                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    val fmt = codec.outputFormat
+                    channelCount = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    pcmEncoding  = if (fmt.containsKey(MediaFormat.KEY_PCM_ENCODING))
+                        fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                    else AudioFormat.ENCODING_PCM_16BIT
+                }
+                else -> if (outIdx >= 0) {
+                    appendSamplesRaw(codec.getOutputBuffer(outIdx)!!, info.size, pcmEncoding, rawSamples)
+                    codec.releaseOutputBuffer(outIdx, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                }
+            }
+        }
+
+        codec.stop()
+        codec.release()
+        extractor.release()
+
+        val samples = rawSamples.toFloatArray()
+        normalize(samples)
+        return Pair(samples, channelCount)
+    }
+
+    /**
      * Loads two samples for the given click type and beat mode:
      *  - first:  the beat sample  (clickType + beatMode)
      *  - second: the accent sample (clickType + BeatMode.ACCENTS)
@@ -153,6 +223,20 @@ object SampleLoader {
             }
         } else {
             floats.forEach { out.add(it) }
+        }
+    }
+
+    // Appends raw interleaved samples without downmixing (used for cue audio).
+    private fun appendSamplesRaw(buf: ByteBuffer, size: Int, encoding: Int, out: ArrayList<Float>) {
+        buf.limit(size)
+        if (encoding == AudioFormat.ENCODING_PCM_FLOAT) {
+            val floats = FloatArray(size / Float.SIZE_BYTES)
+            buf.asFloatBuffer().get(floats)
+            floats.forEach { out.add(it) }
+        } else {
+            val shorts = ShortArray(size / Short.SIZE_BYTES)
+            buf.asShortBuffer().get(shorts)
+            shorts.forEach { out.add(it / 32768f) }
         }
     }
 

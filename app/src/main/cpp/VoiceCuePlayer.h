@@ -10,6 +10,7 @@ class VoiceCuePlayer {
 public:
     void loadCue(int cueId, const float* pcm, int frameCount);
     void trigger(int cueId);
+    void reset();
     void setVolume(float volume);
     void setMuted(bool muted);
     void render(float* buffer, int32_t numFrames, int32_t channelCount);

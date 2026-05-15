@@ -1,4 +1,9 @@
 #include "VoiceCuePlayer.h"
+#include <android/log.h>
+
+#define TAG  "VoiceCuePlayer"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 void VoiceCuePlayer::loadCue(int cueId, const float* pcm, int frameCount) {
     std::lock_guard<std::mutex> lock(mCueMutex);
@@ -7,9 +12,21 @@ void VoiceCuePlayer::loadCue(int cueId, const float* pcm, int frameCount) {
 }
 
 void VoiceCuePlayer::trigger(int cueId) {
+    if (mCueBuffers.find(cueId) == mCueBuffers.end()) {
+        LOGE("VoiceCue: cueId %d not in buffers!", cueId);
+        return;
+    }
     mActiveCueId.store(cueId, std::memory_order_relaxed);
-    mReadPosition.store(0, std::memory_order_relaxed);
-    mPlaying.store(true, std::memory_order_relaxed);
+    mReadPosition.store(0,    std::memory_order_relaxed);
+    mPlaying.store(true,      std::memory_order_relaxed);
+    LOGI("VoiceCue triggered: id=%d frames=%d",
+         cueId, (int)mCueBuffers[cueId].size());
+}
+
+void VoiceCuePlayer::reset() {
+    mActiveCueId.store(-1,   std::memory_order_relaxed);
+    mReadPosition.store(0,   std::memory_order_relaxed);
+    mPlaying.store(false,    std::memory_order_relaxed);
 }
 
 void VoiceCuePlayer::setVolume(float volume) {
@@ -21,37 +38,28 @@ void VoiceCuePlayer::setMuted(bool muted) {
 }
 
 void VoiceCuePlayer::render(float* buffer, int32_t numFrames, int32_t channelCount) {
-    if (!mPlaying.load(std::memory_order_relaxed)) return;
-    if (mMuted.load(std::memory_order_relaxed)) return;
+    if (!mPlaying.load(std::memory_order_relaxed) || mMuted.load(std::memory_order_relaxed)) return;
 
-    const float volume = mVolume.load(std::memory_order_relaxed);
-    const int   cueId  = mActiveCueId.load(std::memory_order_relaxed);
-
-    // RT-safe: skip this callback if loadCue is mid-write
-    if (!mCueMutex.try_lock()) return;
+    const int cueId = mActiveCueId.load(std::memory_order_relaxed);
+    if (cueId < 0) return;
 
     auto it = mCueBuffers.find(cueId);
-    if (it == mCueBuffers.end()) {
-        mCueMutex.unlock();
-        mPlaying.store(false, std::memory_order_relaxed);
-        return;
-    }
+    if (it == mCueBuffers.end()) return;
 
-    const auto& buf    = it->second;
-    int         pos    = mReadPosition.load(std::memory_order_relaxed);
-    const int   bufEnd = static_cast<int>(buf.size());
+    const auto& samples = it->second;
+    int         readPos = mReadPosition.load(std::memory_order_relaxed);
+    const float vol     = mVolume.load(std::memory_order_relaxed);
 
-    for (int32_t i = 0; i < numFrames && pos < bufEnd; ++i) {
-        const float s = buf[pos++] * volume;
-        for (int32_t ch = 0; ch < channelCount; ++ch) {
-            buffer[i * channelCount + ch] += s;
+    for (int32_t f = 0; f < numFrames; f++) {
+        if (readPos >= static_cast<int>(samples.size())) {
+            mPlaying.store(false,  std::memory_order_relaxed);
+            mActiveCueId.store(-1, std::memory_order_relaxed);
+            break;
+        }
+        const float s = samples[readPos++] * vol;
+        for (int32_t ch = 0; ch < channelCount; ch++) {
+            buffer[f * channelCount + ch] += s;
         }
     }
-
-    mCueMutex.unlock();
-
-    mReadPosition.store(pos, std::memory_order_relaxed);
-    if (pos >= bufEnd) {
-        mPlaying.store(false, std::memory_order_relaxed);
-    }
+    mReadPosition.store(readPos, std::memory_order_relaxed);
 }
