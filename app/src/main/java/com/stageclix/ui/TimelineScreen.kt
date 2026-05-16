@@ -96,6 +96,7 @@ import com.stageclix.data.Track
 import com.stageclix.data.TrackKind
 import com.stageclix.data.VoiceCueClip
 import com.stageclix.viewmodel.PlayerViewModel
+import kotlin.math.roundToInt
 
 // ── Constants ─────────────────────────────────────────
 private const val TRACK_HEADER_WIDTH_DP = 72
@@ -124,6 +125,7 @@ fun TimelineScreen(
     val barWidthPx     = with(density) { BAR_WIDTH.toPx() }
     var laneWidthPx    by remember { mutableStateOf(0) }
     var showBeatBuilder by remember { mutableStateOf(false) }
+    var snapMode        by remember { mutableStateOf("Beat") }
 
     LaunchedEffect(positionBeats, isPlaying) {
         if (!isPlaying) return@LaunchedEffect
@@ -206,6 +208,7 @@ fun TimelineScreen(
                             totalBars     = totalBars,
                             positionBeats = positionBeats,
                             beatsPerBar   = currentSong.timeSigNumerator,
+                            snapMode      = snapMode,
                             onClipResized = { viewModel.updateClickClip(it) },
                             onDeleteClip  = { viewModel.removeClickClip(it) },
                             modifier      = Modifier.width(totalWidth).height(TRACK_HEIGHT_DP.dp),
@@ -215,7 +218,7 @@ fun TimelineScreen(
             }
         }
 
-        ZoomSnapBar()
+        ZoomSnapBar(snapMode = snapMode, onSnapModeChange = { snapMode = it })
 
         TimelineTransportBar(
             isPlaying = isPlaying,
@@ -528,6 +531,7 @@ fun TrackLane(
     totalBars: Int,
     positionBeats: Double,
     beatsPerBar: Int,
+    snapMode: String,
     onClipResized: (ClickClip) -> Unit,
     onDeleteClip: (String) -> Unit,
     modifier: Modifier,
@@ -593,6 +597,7 @@ fun TrackLane(
                     ClickClipBlock(
                         clip        = clip,
                         beatsPerBar = beatsPerBar,
+                        snapMode    = snapMode,
                         onResized   = onClipResized,
                         onDelete    = onDeleteClip,
                     )
@@ -614,18 +619,27 @@ fun TrackLane(
 private fun ClickClipBlock(
     clip: ClickClip,
     beatsPerBar: Int,
+    snapMode: String,
     onResized: (ClickClip) -> Unit,
     onDelete: (String) -> Unit,
 ) {
-    // barWidthPx: actual pixels per bar (dp → px). detectDragGestures reports in layout px.
-    val barWidthPx      = with(LocalDensity.current) { BAR_WIDTH.toPx() }
-    var durationBars   by remember(clip.id) { mutableStateOf(clip.durationBars.toFloat()) }
-    var pendingDelete  by remember { mutableStateOf(false) }
-    // Plain float array — not observable state, so it doesn't cause extra recompositions
-    // on every drag event (only durationBars changes need to recompose).
-    val dragAccumulator = remember { floatArrayOf(0f) }
+    val density    = LocalDensity.current
+    val barWidthPx = with(density) { BAR_WIDTH.toPx() }
 
-    // When long-press fires, flash red border for 500ms then delete.
+    // Snap grid in pixels — derived from current snap mode
+    val snapPx = when (snapMode) {
+        "Bar"  -> barWidthPx
+        "Beat" -> barWidthPx / beatsPerBar.coerceAtLeast(1)
+        "1/2"  -> barWidthPx / (beatsPerBar.coerceAtLeast(1) * 2)
+        else   -> 1f
+    }
+
+    // Visual position and size in pixels — keyed on data so they reset after onResized
+    var clipOffsetPx   by remember(clip.id, clip.startBar)   { mutableStateOf(barWidthPx * clip.startBar) }
+    var durationPx     by remember(clip.id, clip.durationBars) { mutableStateOf(barWidthPx * clip.durationBars) }
+    var dragAccumulator by remember { mutableStateOf(0f) }
+    var pendingDelete  by remember { mutableStateOf(false) }
+
     if (pendingDelete) {
         LaunchedEffect(Unit) {
             delay(500)
@@ -638,14 +652,28 @@ private fun ClickClipBlock(
     Box(
         modifier = Modifier
             .padding(top = 4.dp, bottom = 4.dp)
-            // Layout offset in dp — keeps hit-test region aligned with visual position.
-            .offset(x = BAR_WIDTH * clip.startBar)
-            .width(BAR_WIDTH * durationBars)
+            .offset { IntOffset(x = clipOffsetPx.toInt(), y = 0) }
+            .width(with(density) { durationPx.toDp() })
             .fillMaxHeight()
             .background(Color(0xFF1A3A1A), RoundedCornerShape(3.dp))
             .border(1.dp, borderColor, RoundedCornerShape(3.dp))
             .pointerInput(clip.id) {
                 detectTapGestures(onLongPress = { pendingDelete = true })
+            }
+            .pointerInput("move_${clip.id}") {
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        clipOffsetPx = (clipOffsetPx + dragAmount.x).coerceAtLeast(0f)
+                    },
+                    onDragEnd = {
+                        val beatPx = barWidthPx / beatsPerBar.coerceAtLeast(1)
+                        val snappedPx = (clipOffsetPx / beatPx).roundToInt() * beatPx
+                        val newStartBar = (snappedPx / barWidthPx).toInt().coerceAtLeast(0)
+                        onResized(clip.copy(startBar = newStartBar))
+                        clipOffsetPx = barWidthPx * newStartBar
+                    },
+                )
             },
     ) {
         Text(
@@ -674,13 +702,13 @@ private fun ClickClipBlock(
                 .fillMaxWidth()
                 .height(16.dp)
                 .align(Alignment.BottomStart)
-                .padding(bottom = 2.dp),
+                .padding(bottom = 2.dp)
+                .clipToBounds(),
         ) {
             val cells = clip.pattern.cells
             if (cells.isEmpty()) return@Canvas
 
-            val timeSigNum    = clip.pattern.timeSigNumerator
-            // barWidthPx is captured from the outer composable scope (correct px for density)
+            val timeSigNum     = clip.pattern.timeSigNumerator
             val patternWidthPx = barWidthPx
             val totalSlots     = timeSigNum * 4
             val slotWidth      = patternWidthPx / totalSlots
@@ -688,8 +716,8 @@ private fun ClickClipBlock(
 
             for (rep in 0 until repetitions) {
                 val repOffsetX = rep * patternWidthPx
+                if (repOffsetX >= size.width) break
 
-                // Subtle repeat divider
                 if (rep > 0) {
                     drawLine(
                         color       = Color(0xFF2AB02A).copy(alpha = 0.3f),
@@ -707,7 +735,10 @@ private fun ClickClipBlock(
                         NoteRow.SIXTEENTH -> cell.beatIndex * 4 + cell.subIndex
                     }
                     val x = repOffsetX + slotIndex * slotWidth
-                    if (x > size.width) return@forEach
+                    if (x >= size.width) return@forEach
+
+                    val noteWidth = (slotWidth - 1f).coerceAtLeast(1f).coerceAtMost(size.width - x)
+                    if (noteWidth <= 0f) return@forEach
 
                     val barHeight = when (cell.row) {
                         NoteRow.ACC       -> size.height
@@ -724,7 +755,7 @@ private fun ClickClipBlock(
                     drawRect(
                         color   = color,
                         topLeft = Offset(x, size.height - barHeight),
-                        size    = Size((slotWidth - 1f).coerceAtLeast(1f), barHeight),
+                        size    = Size(noteWidth, barHeight),
                     )
                 }
             }
@@ -736,22 +767,26 @@ private fun ClickClipBlock(
                 .fillMaxHeight()
                 .align(Alignment.CenterEnd)
                 .background(Color(0x882AB02A), RoundedCornerShape(topEnd = 3.dp, bottomEnd = 3.dp))
-                .pointerInput(clip.id) {
+                .pointerInput("resize_${clip.id}") {
                     detectDragGestures(
                         onDragEnd = {
-                            dragAccumulator[0] = 0f
-                            onResized(clip.copy(
-                                durationBars = durationBars.toInt().coerceAtLeast(1),
-                            ))
+                            dragAccumulator = 0f
+                            val newDurationBars = (durationPx / barWidthPx).toInt().coerceAtLeast(1)
+                            onResized(clip.copy(durationBars = newDurationBars))
                         },
-                        onDragCancel = { dragAccumulator[0] = 0f },
+                        onDragCancel = { dragAccumulator = 0f },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            dragAccumulator[0] += dragAmount.x
-                            val barsMoved = (dragAccumulator[0] / barWidthPx).toInt()
-                            if (barsMoved != 0) {
-                                durationBars = (durationBars + barsMoved).coerceAtLeast(1f)
-                                dragAccumulator[0] -= barsMoved * barWidthPx
+                            if (snapMode == "Off") {
+                                durationPx = (durationPx + dragAmount.x).coerceAtLeast(snapPx)
+                            } else {
+                                dragAccumulator += dragAmount.x
+                                val snapsAccumulated = (dragAccumulator / snapPx).toInt()
+                                if (snapsAccumulated != 0) {
+                                    durationPx = (durationPx + snapsAccumulated * snapPx)
+                                        .coerceAtLeast(snapPx)
+                                    dragAccumulator -= snapsAccumulated * snapPx
+                                }
                             }
                         },
                     )
@@ -786,8 +821,10 @@ private fun VoiceCueClipBlock(clip: VoiceCueClip) {
 // ── Zoom / snap bar ───────────────────────────────────
 
 @Composable
-fun ZoomSnapBar() {
-    var snapMode by remember { mutableStateOf("Beat") }
+fun ZoomSnapBar(
+    snapMode: String,
+    onSnapModeChange: (String) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -817,7 +854,7 @@ fun ZoomSnapBar() {
                         else Color(0xFF222222),
                         RoundedCornerShape(2.dp),
                     )
-                    .clickable { snapMode = mode }
+                    .clickable { onSnapModeChange(mode) }
                     .padding(horizontal = 5.dp, vertical = 2.dp),
                 contentAlignment = Alignment.Center,
             ) {
