@@ -231,11 +231,16 @@ fun TimelineScreen(
 
     if (showBeatBuilder) {
         BeatBuilderSheet(
-            song               = currentSong,
-            onAuditNote        = { row -> viewModel.auditNote(row) },
+            song                = currentSong,
+            onAuditNote         = { row -> viewModel.auditNote(row) },
             onClickTypeSelected = { clickType -> viewModel.loadClickSamples(clickType) },
-            onDismiss          = { showBeatBuilder = false },
-            onConfirm          = { clip ->
+            onTimeSigChanged    = { n -> viewModel.setTimeSignature(n, 4) },
+            onDismiss           = { showBeatBuilder = false },
+            onConfirm           = { clip ->
+                viewModel.setTimeSignature(
+                    clip.pattern.timeSigNumerator,
+                    clip.pattern.timeSigDenominator,
+                )
                 viewModel.addClickClip(clip)
                 showBeatBuilder = false
             },

@@ -44,6 +44,7 @@ fun BeatBuilderSheet(
     song: Song,
     onAuditNote: (row: Int) -> Unit,
     onClickTypeSelected: (ClickType) -> Unit = {},
+    onTimeSigChanged: (numerator: Int) -> Unit = {},
     onDismiss: () -> Unit,
     onConfirm: (ClickClip) -> Unit,
 ) {
@@ -182,7 +183,10 @@ fun BeatBuilderSheet(
                                     if (sel) Color(0xFF3A7BD5) else Color(0xFF222222),
                                     RoundedCornerShape(3.dp),
                                 )
-                                .clickable { timeSigNum = n }
+                                .clickable {
+                                    timeSigNum = n
+                                    onTimeSigChanged(n)
+                                }
                                 .padding(horizontal = 6.dp, vertical = 3.dp),
                         ) {
                             Text(

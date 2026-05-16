@@ -144,8 +144,12 @@ private:
     std::vector<VoiceCueSection>     mSectionsActive;
     std::atomic<bool>                mSectionsDirty{false};
     std::mutex                       mSectionsMutex;
-    std::vector<BeatEvent>           mBeatPattern;
+    std::vector<BeatEvent>           mBeatPatternPending;
+    std::vector<BeatEvent>           mBeatPatternActive;
+    std::atomic<bool>                mBeatPatternDirty{false};
     std::mutex                       mBeatPatternMutex;
+
+    std::atomic<int64_t>             mLastTriggeredEventFrame{-1};
 
     std::vector<ClipRange>           mClickClipRanges;
     std::atomic<bool>                mClipRangesDirty{false};

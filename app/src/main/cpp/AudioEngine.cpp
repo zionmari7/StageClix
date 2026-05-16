@@ -83,6 +83,7 @@ bool AudioEngine::start(int deviceId) {
     mCurrentBeat.store(-1, std::memory_order_relaxed);
     mCueFiredThisBar.store(false, std::memory_order_relaxed);
     mCountFiredThisBeat.store(false, std::memory_order_relaxed);
+    mLastTriggeredEventFrame.store(-1, std::memory_order_relaxed);
     mAtomicFramePos.store(0, std::memory_order_relaxed);
     mAccentHead = {};
     mClickHead  = {};
@@ -118,6 +119,7 @@ void AudioEngine::rewind() {
     mCurrentBeat.store(-1, std::memory_order_relaxed);
     mCueFiredThisBar.store(false, std::memory_order_relaxed);
     mCountFiredThisBeat.store(false, std::memory_order_relaxed);
+    mLastTriggeredEventFrame.store(-1, std::memory_order_relaxed);
     mVoiceCuePlayer->reset();
     mBackingMixer->rewind();
     mRewindRequested.store(true, std::memory_order_release);
@@ -152,7 +154,8 @@ void AudioEngine::setBeatPattern(
     }
     {
         std::lock_guard<std::mutex> lock(mBeatPatternMutex);
-        mBeatPattern = std::move(pattern);
+        mBeatPatternPending = std::move(pattern);
+        mBeatPatternDirty.store(true, std::memory_order_release);
     }
     setTimeSignature(timeSigNumerator, mDenominator.load(std::memory_order_relaxed));
     setBpm(bpm);
@@ -264,6 +267,13 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         mClipRangesDirty.store(false, std::memory_order_relaxed);
     }
 
+    if (mBeatPatternDirty.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(mBeatPatternMutex);
+        mBeatPatternActive = mBeatPatternPending;
+        mBeatPatternDirty.store(false, std::memory_order_relaxed);
+        LOGI("Beat pattern swapped: %d events", (int)mBeatPatternActive.size());
+    }
+
     if (mRewindRequested.exchange(false, std::memory_order_acq_rel)) {
         mCurrentFrame     = 0;
         mLastQuarterNum   = -1;
@@ -321,23 +331,18 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
     }
 
-    std::vector<BeatEvent> beatPattern;
-    {
-        std::lock_guard<std::mutex> lock(mBeatPatternMutex);
-        beatPattern = mBeatPattern;
-    }
-
     // ── Channel 0: click track (accent + beat ticks) ──────────────────────────
-    if (playing && clickEnabled && !beatPattern.empty()) {
-        const int timeSigNum       = std::max(numerator, 1);
-        const int64_t framesPerBar = static_cast<int64_t>(framesPerBeat * timeSigNum);
-        const int64_t posInBar     = (framesPerBar > 0) ? mCurrentFrame % framesPerBar : 0;
+    if (playing && clickEnabled && !mBeatPatternActive.empty()) {
+        const int     timeSigNum    = std::max(numerator, 1);
+        // Integer frames per beat/bar via llround — eliminates float truncation drift
+        const int64_t framesPerBeatI = llround((double)mSampleRate * 60.0 / bpm);
+        const int64_t framesPerBarI  = framesPerBeatI * timeSigNum;
 
         // Gate: only fire when inside a clip range. If no ranges are defined yet,
         // play freely (preserves pre-clip behaviour during audition).
         bool inClipRange = mClickClipRangesActive.empty();
-        if (!inClipRange && framesPerBar > 0) {
-            const int currentBar = static_cast<int>(mCurrentFrame / framesPerBar);
+        if (!inClipRange && framesPerBarI > 0) {
+            const int currentBar = static_cast<int>(mCurrentFrame / framesPerBarI);
             for (auto& range : mClickClipRangesActive) {
                 if (currentBar >= range.startBar &&
                     currentBar <  range.startBar + range.durationBars) {
@@ -347,24 +352,37 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             }
         }
 
-        if (inClipRange) for (auto& event : beatPattern) {
-            double eventBeatPos = static_cast<double>(event.beatIndex);
+        if (inClipRange) for (auto& event : mBeatPatternActive) {
+            double eventBeatOffset = static_cast<double>(event.beatIndex);
             if (event.row == 2)      // 8TH
-                eventBeatPos += event.subIndex * 0.5;
+                eventBeatOffset += event.subIndex * 0.5;
             else if (event.row == 3) // 16TH
-                eventBeatPos += event.subIndex * 0.25;
+                eventBeatOffset += event.subIndex * 0.25;
 
-            const int64_t eventFrame = static_cast<int64_t>(eventBeatPos * framesPerBeat);
+            // Exact frame offset within a bar, rounded to nearest integer frame
+            const int64_t eventOffsetInBar = llround(eventBeatOffset * (double)framesPerBeatI);
+            const int64_t barsElapsed      = (framesPerBarI > 0) ? mCurrentFrame / framesPerBarI : 0;
+            int64_t       eventFrame       = barsElapsed * framesPerBarI + eventOffsetInBar;
 
-            if (posInBar <= eventFrame && posInBar + numFrames > eventFrame) {
-                const int offsetInBuffer = static_cast<int>(eventFrame - posInBar);
+            // If this bar's instance is already behind us, look at the next bar
+            if (eventFrame < mCurrentFrame)
+                eventFrame += framesPerBarI;
+
+            const int64_t lastTriggered = mLastTriggeredEventFrame.load(std::memory_order_relaxed);
+
+            if (eventFrame >= mCurrentFrame &&
+                eventFrame <  mCurrentFrame + numFrames &&
+                eventFrame != lastTriggered) {
+
+                mLastTriggeredEventFrame.store(eventFrame, std::memory_order_relaxed);
+                const int offsetInBuffer = static_cast<int>(eventFrame - mCurrentFrame);
 
                 if (event.row == 0) { // ACC
                     if (accentEnabled)
                         triggerSampleAt(mAccentBuf, offsetInBuffer,
                             accentVol * masterVol, mClickMixBuf.data(), numFrames);
                 } else {
-                    float gain = 1.0f;
+                    float gain   = 1.0f;
                     bool  tierOn = false;
                     if (event.row == 1) {
                         tierOn = quarterEnabled;
